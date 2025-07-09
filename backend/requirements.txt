@@ -1,6 +1,6 @@
 # Core FastAPI and GraphQL
 fastapi==0.104.1
-strawberry-graphql[fastapi]==0.214.1
+strawberry-graphql[fastapi]==0.214.0
 uvicorn[standard]==0.24.0
 
 # ML Frameworks
