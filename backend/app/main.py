@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from transformers import pipeline
 import uvicorn
@@ -9,6 +10,7 @@ import logging
 import time
 import pandas as pd
 import io
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -77,6 +79,27 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
         raise
+
+# Add favicon route to prevent 404 errors
+@app.get("/favicon.ico")
+async def favicon():
+    return JSONResponse(status_code=204, content={})
+
+# Add root route
+@app.get("/")
+async def root():
+    return {
+        "message": "Sentiment Analysis API",
+        "version": "1.0.0",
+        "model": "siebert/sentiment-roberta-large-english",
+        "endpoints": {
+            "health": "/api/health",
+            "model_info": "/api/model/info",
+            "predict": "/api/predict",
+            "batch_predict": "/api/predict/batch",
+            "file_analyze": "/api/analyze/file"
+        }
+    }
 
 @app.get("/api/health", response_model=HealthStatus)
 async def health_check():
