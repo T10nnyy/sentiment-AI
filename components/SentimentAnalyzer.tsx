@@ -1,107 +1,142 @@
 "use client"
 
-import type React from "react"
 import { useState } from "react"
-import { Send, Loader2, TrendingUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
-import { useSentimentPrediction } from "@/hooks/useSentiment"
-import { useSentimentStore } from "@/lib/store"
-import ResultDisplay from "./ResultDisplay"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { useSentiment } from "@/hooks/useSentiment"
+import { Loader2, Send, RotateCcw } from "lucide-react"
+import { toast } from "sonner"
+import type { SentimentResult } from "@/types/sentiment"
 
-const SentimentAnalyzer: React.FC = () => {
+export default function SentimentAnalyzer() {
   const [text, setText] = useState("")
-  const { predict, predictLive, liveResult, isLoading } = useSentimentPrediction()
-  const { currentResult, enableLiveTyping } = useSentimentStore()
+  const [result, setResult] = useState<SentimentResult | null>(null)
+  const { analyzeSentiment, loading } = useSentiment()
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!text.trim()) return
+  const handleAnalyze = async () => {
+    if (!text.trim()) {
+      toast.error("Please enter some text to analyze")
+      return
+    }
 
     try {
-      await predict(text)
+      const analysis = await analyzeSentiment(text)
+      setResult(analysis)
+      toast.success("Analysis completed successfully!")
     } catch (error) {
-      console.error("Prediction failed:", error)
+      toast.error("Failed to analyze sentiment")
+      console.error("Analysis error:", error)
     }
   }
 
-  const handleTextChange = (value: string) => {
-    setText(value)
-    if (enableLiveTyping) {
-      predictLive(value)
+  const handleReset = () => {
+    setText("")
+    setResult(null)
+  }
+
+  const getSentimentColor = (sentiment: string) => {
+    switch (sentiment.toLowerCase()) {
+      case "positive":
+        return "bg-green-500"
+      case "negative":
+        return "bg-red-500"
+      case "neutral":
+        return "bg-gray-500"
+      default:
+        return "bg-blue-500"
+    }
+  }
+
+  const getSentimentBadgeVariant = (sentiment: string) => {
+    switch (sentiment.toLowerCase()) {
+      case "positive":
+        return "default" as const
+      case "negative":
+        return "destructive" as const
+      case "neutral":
+        return "secondary" as const
+      default:
+        return "outline" as const
     }
   }
 
   return (
     <div className="space-y-6">
-      <Card className="max-w-4xl mx-auto">
-        <CardHeader>
-          <CardTitle className="flex items-center">
-            <TrendingUp className="w-6 h-6 text-blue-600 mr-2" />
-            Sentiment Analysis
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="space-y-4">
+        <Textarea
+          placeholder="Enter text to analyze sentiment..."
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={4}
+          className="resize-none"
+        />
+
+        <div className="flex gap-2">
+          <Button onClick={handleAnalyze} disabled={loading || !text.trim()} className="flex-1">
+            {loading ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Analyzing...
+              </>
+            ) : (
+              <>
+                <Send className="w-4 h-4 mr-2" />
+                Analyze Sentiment
+              </>
+            )}
+          </Button>
+
+          <Button variant="outline" onClick={handleReset} disabled={loading}>
+            <RotateCcw className="w-4 h-4 mr-2" />
+            Reset
+          </Button>
+        </div>
+      </div>
+
+      {result && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              Analysis Result
+              <Badge variant={getSentimentBadgeVariant(result.sentiment)}>{result.sentiment}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
             <div>
-              <Textarea
-                value={text}
-                onChange={(e) => handleTextChange(e.target.value)}
-                placeholder="Enter text to analyze sentiment..."
-                className="min-h-[120px]"
-                disabled={isLoading}
-              />
-            </div>
-
-            <div className="flex justify-between items-center">
-              <div className="text-sm text-gray-500">
-                {text.length} characters
-                {enableLiveTyping && " • Live typing enabled"}
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium">Confidence</span>
+                <span className="text-sm text-muted-foreground">{(result.confidence * 100).toFixed(1)}%</span>
               </div>
-              <Button type="submit" disabled={!text.trim() || isLoading}>
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Analyzing...
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4 mr-2" />
-                    Analyze
-                  </>
-                )}
-              </Button>
+              <Progress value={result.confidence * 100} className="h-2" />
             </div>
-          </form>
-        </CardContent>
-      </Card>
 
-      {/* Live Result */}
-      {enableLiveTyping && liveResult && (
-        <Card className="max-w-4xl mx-auto border-blue-200 bg-blue-50">
-          <CardHeader>
-            <CardTitle className="text-sm text-blue-700">Live Preview</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResultDisplay result={liveResult} isLive />
-          </CardContent>
-        </Card>
-      )}
+            {result.scores && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium">Detailed Scores</h4>
+                {Object.entries(result.scores).map(([sentiment, score]) => (
+                  <div key={sentiment} className="flex items-center justify-between">
+                    <span className="text-sm capitalize">{sentiment}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-20 bg-gray-200 rounded-full h-2">
+                        <div
+                          className={`h-2 rounded-full ${getSentimentColor(sentiment)}`}
+                          style={{ width: `${score * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-sm text-muted-foreground w-12 text-right">{(score * 100).toFixed(1)}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
-      {/* Main Result */}
-      {currentResult && (
-        <Card className="max-w-4xl mx-auto">
-          <CardHeader>
-            <CardTitle>Analysis Result</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResultDisplay result={currentResult} />
+            <div className="text-xs text-muted-foreground">Model: siebert/sentiment-roberta-large-english</div>
           </CardContent>
         </Card>
       )}
     </div>
   )
 }
-
-export default SentimentAnalyzer

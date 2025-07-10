@@ -1,121 +1,185 @@
 "use client"
 
-import React from "react"
-import { motion, AnimatePresence } from "framer-motion"
-import { History, Trash2, TrendingUp, TrendingDown, Clock, FileText } from "lucide-react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { useSentimentStore } from "@/lib/store"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useAnalysisHistory } from "@/hooks/useSentiment"
+import { Search, Trash2, Download, Filter } from "lucide-react"
+import { toast } from "sonner"
 
-const AnalysisHistory: React.FC = () => {
-  const { history, clearHistory, removeFromHistory } = useSentimentStore()
+export default function AnalysisHistory() {
+  const [searchTerm, setSearchTerm] = useState("")
+  const [sentimentFilter, setSentimentFilter] = useState<string>("all")
+  const [sortBy, setSortBy] = useState<string>("date")
+  const { history, loading, clearHistory, deleteItem, exportHistory } = useAnalysisHistory()
 
-  const getSentimentColor = (label: string) => {
-    return label === "positive" ? "text-green-600" : "text-red-600"
+  const filteredHistory = history
+    .filter((item) => {
+      const matchesSearch = item.text.toLowerCase().includes(searchTerm.toLowerCase())
+      const matchesSentiment = sentimentFilter === "all" || item.sentiment.toLowerCase() === sentimentFilter
+      return matchesSearch && matchesSentiment
+    })
+    .sort((a, b) => {
+      switch (sortBy) {
+        case "date":
+          return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        case "confidence":
+          return b.confidence - a.confidence
+        case "text":
+          return a.text.localeCompare(b.text)
+        default:
+          return 0
+      }
+    })
+
+  const handleClearHistory = async () => {
+    try {
+      await clearHistory()
+      toast.success("History cleared successfully")
+    } catch (error) {
+      toast.error("Failed to clear history")
+    }
   }
 
-  const getSentimentIcon = (label: string) => {
-    return label === "positive" ? TrendingUp : TrendingDown
+  const handleDeleteItem = async (id: string) => {
+    try {
+      await deleteItem(id)
+      toast.success("Item deleted successfully")
+    } catch (error) {
+      toast.error("Failed to delete item")
+    }
   }
 
-  const getSentimentBg = (label: string) => {
-    return label === "positive" ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"
+  const handleExport = async () => {
+    try {
+      await exportHistory()
+      toast.success("History exported successfully")
+    } catch (error) {
+      toast.error("Failed to export history")
+    }
   }
 
-  const formatTimestamp = (timestamp: Date) => {
-    const now = new Date()
-    const diff = now.getTime() - timestamp.getTime()
-    const minutes = Math.floor(diff / 60000)
-    const hours = Math.floor(diff / 3600000)
-    const days = Math.floor(diff / 86400000)
-
-    if (minutes < 1) return "Just now"
-    if (minutes < 60) return `${minutes}m ago`
-    if (hours < 24) return `${hours}h ago`
-    return `${days}d ago`
+  const getSentimentBadgeVariant = (sentiment: string) => {
+    switch (sentiment.toLowerCase()) {
+      case "positive":
+        return "default" as const
+      case "negative":
+        return "destructive" as const
+      case "neutral":
+        return "secondary" as const
+      default:
+        return "outline" as const
+    }
   }
 
-  if (history.length === 0) {
+  const formatDate = (timestamp: string) => {
+    return new Date(timestamp).toLocaleString()
+  }
+
+  if (loading) {
     return (
-      <Card className="max-w-4xl mx-auto text-center py-12">
-        <History className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-        <h3 className="text-lg font-semibold text-gray-900 mb-2">No Analysis History</h3>
-        <p className="text-gray-600">Your analysis history will appear here after you analyze some text.</p>
-      </Card>
+      <div className="flex items-center justify-center py-8">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading history...</p>
+        </div>
+      </div>
     )
   }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between max-w-4xl mx-auto">
-        <div className="flex items-center">
-          <History className="w-8 h-8 text-blue-600 mr-3" />
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Analysis History</h1>
-            <p className="text-gray-600">{history.length} analysis results</p>
-          </div>
+      <div className="flex flex-col sm:flex-row gap-4">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+          <Input
+            placeholder="Search analysis history..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-10"
+          />
         </div>
 
-        <Button variant="outline" onClick={clearHistory}>
-          <Trash2 className="w-4 h-4 mr-2" />
-          Clear All
-        </Button>
+        <Select value={sentimentFilter} onValueChange={setSentimentFilter}>
+          <SelectTrigger className="w-full sm:w-40">
+            <SelectValue placeholder="Filter by sentiment" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Sentiments</SelectItem>
+            <SelectItem value="positive">Positive</SelectItem>
+            <SelectItem value="negative">Negative</SelectItem>
+            <SelectItem value="neutral">Neutral</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={sortBy} onValueChange={setSortBy}>
+          <SelectTrigger className="w-full sm:w-40">
+            <SelectValue placeholder="Sort by" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="date">Date</SelectItem>
+            <SelectItem value="confidence">Confidence</SelectItem>
+            <SelectItem value="text">Text</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
-      {/* History List */}
-      <Card className="max-w-4xl mx-auto">
-        <CardContent className="p-0">
-          <div className="divide-y divide-gray-200">
-            <AnimatePresence>
-              {history.map((item) => (
-                <motion.div
-                  key={item.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
-                  className="p-6 hover:bg-gray-50 transition-colors duration-200"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 mr-4">
-                      <div className="flex items-center mb-2">
-                        <FileText className="w-4 h-4 text-gray-400 mr-2" />
-                        <div className="flex items-center text-sm text-gray-500">
-                          <Clock className="w-3 h-3 mr-1" />
-                          {formatTimestamp(item.timestamp)}
-                        </div>
-                      </div>
-                      <p className="text-gray-700 mb-3 line-clamp-3">{item.text}</p>
-                    </div>
+      <div className="flex justify-between items-center">
+        <p className="text-sm text-muted-foreground">
+          {filteredHistory.length} of {history.length} items
+        </p>
 
-                    <div className="flex items-center space-x-3">
-                      <div
-                        className={`flex items-center space-x-2 px-3 py-2 rounded-lg border ${getSentimentBg(item.result.label)}`}
-                      >
-                        {React.createElement(getSentimentIcon(item.result.label), {
-                          className: `w-4 h-4 ${getSentimentColor(item.result.label)}`,
-                        })}
-                        <div className="text-right">
-                          <div className={`font-medium text-sm ${getSentimentColor(item.result.label)}`}>
-                            {item.result.label.charAt(0).toUpperCase() + item.result.label.slice(1)}
-                          </div>
-                          <div className="text-xs text-gray-600">{(item.result.score * 100).toFixed(1)}%</div>
-                        </div>
-                      </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={handleExport}>
+            <Download className="w-4 h-4 mr-2" />
+            Export
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleClearHistory}>
+            <Trash2 className="w-4 h-4 mr-2" />
+            Clear All
+          </Button>
+        </div>
+      </div>
 
-                      <Button variant="ghost" size="sm" onClick={() => removeFromHistory(item.id)}>
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+      {filteredHistory.length === 0 ? (
+        <Card>
+          <CardContent className="text-center py-8">
+            <Filter className="w-12 h-12 mx-auto text-gray-400 mb-4" />
+            <p className="text-muted-foreground">
+              {history.length === 0
+                ? "No analysis history yet. Start analyzing some text!"
+                : "No items match your current filters."}
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {filteredHistory.map((item) => (
+            <Card key={item.id}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm mb-2 line-clamp-2">{item.text}</p>
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span>{formatDate(item.timestamp)}</span>
+                      <span>Confidence: {(item.confidence * 100).toFixed(1)}%</span>
                     </div>
                   </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
-        </CardContent>
-      </Card>
+                  <div className="flex items-center gap-2 ml-4">
+                    <Badge variant={getSentimentBadgeVariant(item.sentiment)}>{item.sentiment}</Badge>
+                    <Button variant="ghost" size="sm" onClick={() => handleDeleteItem(item.id)}>
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
-
-export default AnalysisHistory

@@ -3,18 +3,14 @@
  */
 
 export interface SentimentResult {
-  label: string
-  score: number
-  processing_time?: number
-  confidence?: number
-  responseTime?: number
-  timestamp?: string
-  text?: string
-  metadata?: {
-    modelName?: string
-    framework?: string
-    device?: string
+  sentiment: string
+  confidence: number
+  scores?: {
+    positive: number
+    negative: number
+    neutral: number
   }
+  processing_time?: number
 }
 
 export interface BatchSentimentRequest {
@@ -34,15 +30,21 @@ export interface SentimentRequest {
 }
 
 export interface ModelInfo {
-  model_name: string
+  name: string
   version: string
-  framework: string
-  labels: string[]
-  max_length: number
-  description?: string
-  quantized: boolean
-  device: string
-  loadTime?: number
+  type: string
+  language: string
+  accuracy: number
+  f1_score: number
+  parameters: string
+  size: string
+  description: string
+  usage_stats?: {
+    total_requests: number
+    avg_response_time: number
+    success_rate: number
+    memory_usage: number
+  }
 }
 
 export interface ApiError {
@@ -64,8 +66,14 @@ export interface BatchAnalysisResult {
 export interface AnalysisHistoryItem {
   id: string
   text: string
-  result: SentimentResult
-  timestamp: Date
+  sentiment: string
+  confidence: number
+  timestamp: string
+  scores?: {
+    positive: number
+    negative: number
+    neutral: number
+  }
 }
 
 export interface SentimentStats {
@@ -116,7 +124,7 @@ export interface SentimentStore {
 
   // Settings
   useGraphQL: boolean
-  enableLiveTyping: boolean
+  liveTypingConfig: LiveTypingConfig
   theme: "light" | "dark"
 
   // Actions
@@ -129,7 +137,6 @@ export interface SentimentStore {
   removeFromHistory: (id: string) => void
   updateStats: (responseTime: number) => void
   toggleGraphQL: () => void
-  toggleLiveTyping: () => void
   setTheme: (theme: "light" | "dark") => void
   reset: () => void
 }
@@ -171,4 +178,21 @@ export interface PerformanceStats {
   totalPredictions: number
   averageResponseTime: number | null
   responseTimes: number[]
+}
+
+export interface BatchResult {
+  results: SentimentResult[]
+  summary: {
+    positive: number
+    negative: number
+    neutral: number
+    total: number
+  }
+  processing_time: number
+}
+
+export interface LiveTypingConfig {
+  enabled: boolean
+  debounce_ms: number
+  min_length: number
 }

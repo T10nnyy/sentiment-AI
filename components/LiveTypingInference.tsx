@@ -1,86 +1,127 @@
 "use client"
 
-import type React from "react"
-import { useState } from "react"
-import { Zap, Activity } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useState, useEffect } from "react"
 import { Textarea } from "@/components/ui/textarea"
-import { useSentimentPrediction } from "@/hooks/useSentiment"
-import { useSentimentStore } from "@/lib/store"
-import ResultDisplay from "./ResultDisplay"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
+import { useSentiment } from "@/hooks/useSentiment"
+import { useDebounce } from "@/hooks/useDebounce"
+import { Zap, Loader2 } from "lucide-react"
+import type { SentimentResult } from "@/types/sentiment"
 
-const LiveTypingInference: React.FC = () => {
+export default function LiveTypingInference() {
   const [text, setText] = useState("")
-  const { predictLive, liveResult } = useSentimentPrediction()
-  const { enableLiveTyping, toggleLiveTyping } = useSentimentStore()
+  const [enabled, setEnabled] = useState(true)
+  const [result, setResult] = useState<SentimentResult | null>(null)
+  const debouncedText = useDebounce(text, 500)
+  const { analyzeSentiment, loading } = useSentiment()
 
-  const handleTextChange = (value: string) => {
-    setText(value)
-    if (enableLiveTyping) {
-      predictLive(value)
+  useEffect(() => {
+    if (enabled && debouncedText.trim() && debouncedText.length > 10) {
+      analyzeSentiment(debouncedText).then(setResult).catch(console.error)
+    } else {
+      setResult(null)
+    }
+  }, [debouncedText, enabled, analyzeSentiment])
+
+  const getSentimentColor = (sentiment: string) => {
+    switch (sentiment.toLowerCase()) {
+      case "positive":
+        return "text-green-600"
+      case "negative":
+        return "text-red-600"
+      case "neutral":
+        return "text-gray-600"
+      default:
+        return "text-blue-600"
+    }
+  }
+
+  const getSentimentBadgeVariant = (sentiment: string) => {
+    switch (sentiment.toLowerCase()) {
+      case "positive":
+        return "default" as const
+      case "negative":
+        return "destructive" as const
+      case "neutral":
+        return "secondary" as const
+      default:
+        return "outline" as const
     }
   }
 
   return (
     <div className="space-y-6">
-      <Card className="max-w-4xl mx-auto">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center">
-              <Zap className="w-6 h-6 text-blue-600 mr-2" />
-              Live Typing Inference
-            </CardTitle>
-            <button
-              onClick={toggleLiveTyping}
-              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                enableLiveTyping
-                  ? "bg-green-100 text-green-700 border border-green-200"
-                  : "bg-gray-100 text-gray-700 border border-gray-200"
-              }`}
-            >
-              <Activity className={`w-4 h-4 ${enableLiveTyping ? "animate-pulse" : ""}`} />
-              <span>{enableLiveTyping ? "Live" : "Disabled"}</span>
-            </button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <Textarea
-              value={text}
-              onChange={(e) => handleTextChange(e.target.value)}
-              placeholder="Start typing to see real-time sentiment analysis..."
-              className="min-h-[150px]"
-            />
+      <div className="flex items-center space-x-2">
+        <Switch id="live-mode" checked={enabled} onCheckedChange={setEnabled} />
+        <Label htmlFor="live-mode" className="flex items-center gap-2">
+          <Zap className="w-4 h-4" />
+          Live Analysis Mode
+        </Label>
+        {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+      </div>
 
-            <div className="text-sm text-gray-500">
-              {text.length} characters
-              {enableLiveTyping && " • Analysis updates as you type"}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <Textarea
+        placeholder="Start typing to see live sentiment analysis... (minimum 10 characters)"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={6}
+        className="resize-none"
+      />
 
-      {enableLiveTyping && liveResult && text.trim() && (
-        <Card className="max-w-4xl mx-auto border-blue-200 bg-blue-50">
+      <div className="text-sm text-muted-foreground">
+        Characters: {text.length} | Words: {text.trim().split(/\s+/).filter(Boolean).length}
+      </div>
+
+      {result && enabled && (
+        <Card>
           <CardHeader>
-            <CardTitle className="text-lg text-blue-700 flex items-center">
-              <Activity className="w-5 h-5 mr-2 animate-pulse" />
-              Live Analysis Result
+            <CardTitle className="flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <Zap className="w-5 h-5" />
+                Live Analysis
+              </span>
+              <Badge variant={getSentimentBadgeVariant(result.sentiment)}>{result.sentiment}</Badge>
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <ResultDisplay result={liveResult} isLive />
+          <CardContent className="space-y-4">
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium">Confidence</span>
+                <span className="text-sm text-muted-foreground">{(result.confidence * 100).toFixed(1)}%</span>
+              </div>
+              <Progress value={result.confidence * 100} className="h-2" />
+            </div>
+
+            {result.scores && (
+              <div className="grid grid-cols-3 gap-4 text-center">
+                {Object.entries(result.scores).map(([sentiment, score]) => (
+                  <div key={sentiment} className="space-y-1">
+                    <div className={`text-lg font-semibold ${getSentimentColor(sentiment)}`}>
+                      {(score * 100).toFixed(1)}%
+                    </div>
+                    <div className="text-xs text-muted-foreground capitalize">{sentiment}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="text-xs text-muted-foreground text-center">
+              Updates automatically as you type • Model: siebert/sentiment-roberta-large-english
+            </div>
           </CardContent>
         </Card>
       )}
 
-      {!enableLiveTyping && (
-        <Card className="max-w-4xl mx-auto border-gray-200 bg-gray-50">
+      {!enabled && (
+        <Card>
           <CardContent className="text-center py-8">
-            <Zap className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-700 mb-2">Live Typing Disabled</h3>
-            <p className="text-gray-600">
-              Enable live typing in the header to see real-time sentiment analysis as you type.
+            <Zap className="w-12 h-12 mx-auto text-gray-400 mb-4" />
+            <p className="text-muted-foreground">
+              Enable live analysis mode to see real-time sentiment analysis as you type
             </p>
           </CardContent>
         </Card>
@@ -88,5 +129,3 @@ const LiveTypingInference: React.FC = () => {
     </div>
   )
 }
-
-export default LiveTypingInference

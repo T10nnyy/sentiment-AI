@@ -1,9 +1,23 @@
-import { ApolloClient, InMemoryCache, gql } from "@apollo/client"
+import { ApolloClient, InMemoryCache, createHttpLink } from "@apollo/client"
+import { setContext } from "@apollo/client/link/context"
 
-const GRAPHQL_URL = process.env.NEXT_PUBLIC_GRAPHQL_URL || "http://localhost:8000/graphql"
+const httpLink = createHttpLink({
+  uri: process.env.NEXT_PUBLIC_GRAPHQL_URL || "http://localhost:8000/graphql",
+})
+
+const authLink = setContext((_, { headers }) => {
+  const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null
+
+  return {
+    headers: {
+      ...headers,
+      authorization: token ? `Bearer ${token}` : "",
+    },
+  }
+})
 
 export const apolloClient = new ApolloClient({
-  uri: GRAPHQL_URL,
+  link: authLink.concat(httpLink),
   cache: new InMemoryCache(),
   defaultOptions: {
     watchQuery: {
@@ -14,36 +28,3 @@ export const apolloClient = new ApolloClient({
     },
   },
 })
-
-export const PREDICT_SENTIMENT = gql`
-  query PredictSentiment($text: String!) {
-    predict(text: $text) {
-      label
-      score
-      processing_time
-    }
-  }
-`
-
-export const BATCH_PREDICT_SENTIMENT = gql`
-  query BatchPredictSentiment($texts: [String!]!) {
-    batchPredict(texts: $texts) {
-      label
-      score
-      processing_time
-    }
-  }
-`
-
-export const GET_MODEL_INFO = gql`
-  query GetModelInfo {
-    modelInfo {
-      model_name
-      version
-      framework
-      labels
-      max_length
-      description
-    }
-  }
-`
