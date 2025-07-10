@@ -1,39 +1,27 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import {
-  Search,
-  Filter,
-  Trash2,
-  Download,
-  Calendar,
-  TrendingUp,
-  TrendingDown,
-  MessageSquare,
-  History,
-} from "lucide-react"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import type { SentimentResult } from "@/types/sentiment"
+import { Separator } from "@/components/ui/separator"
+import { History, Search, Filter, Trash2, Download, ThumbsUp, ThumbsDown, Minus, Calendar } from "lucide-react"
+import type { SentimentResult } from "@/lib/api"
 
-interface HistoryItem extends SentimentResult {
+interface AnalysisHistoryItem extends SentimentResult {
   id: string
   timestamp: Date
 }
 
-export function AnalysisHistory() {
-  const [history, setHistory] = useState<HistoryItem[]>([])
-  const [filteredHistory, setFilteredHistory] = useState<HistoryItem[]>([])
+export default function AnalysisHistory() {
+  const [history, setHistory] = useState<AnalysisHistoryItem[]>([])
   const [searchTerm, setSearchTerm] = useState("")
-  const [sentimentFilter, setSentimentFilter] = useState<string>("all")
-  const [sortBy, setSortBy] = useState<string>("newest")
+  const [filterSentiment, setFilterSentiment] = useState<string>("all")
 
-  // Load history from localStorage on component mount
   useEffect(() => {
-    const savedHistory = localStorage.getItem("sentiment_analysis_history")
+    // Load history from localStorage
+    const savedHistory = localStorage.getItem("sentiment-analysis-history")
     if (savedHistory) {
       try {
         const parsed = JSON.parse(savedHistory).map((item: any) => ({
@@ -47,274 +35,225 @@ export function AnalysisHistory() {
     }
   }, [])
 
-  // Filter and sort history
-  useEffect(() => {
-    let filtered = [...history]
+  const saveHistory = (newHistory: AnalysisHistoryItem[]) => {
+    setHistory(newHistory)
+    localStorage.setItem("sentiment-analysis-history", JSON.stringify(newHistory))
+  }
 
-    // Apply search filter
-    if (searchTerm) {
-      filtered = filtered.filter((item) => item.text.toLowerCase().includes(searchTerm.toLowerCase()))
-    }
-
-    // Apply sentiment filter
-    if (sentimentFilter !== "all") {
-      filtered = filtered.filter((item) => item.sentiment.toLowerCase() === sentimentFilter.toLowerCase())
-    }
-
-    // Apply sorting
-    filtered.sort((a, b) => {
-      switch (sortBy) {
-        case "newest":
-          return b.timestamp.getTime() - a.timestamp.getTime()
-        case "oldest":
-          return a.timestamp.getTime() - b.timestamp.getTime()
-        case "confidence":
-          return b.confidence - a.confidence
-        case "text":
-          return a.text.localeCompare(b.text)
-        default:
-          return 0
-      }
-    })
-
-    setFilteredHistory(filtered)
-  }, [history, searchTerm, sentimentFilter, sortBy])
-
-  // Save analysis to history
-  const saveToHistory = (result: SentimentResult) => {
-    const historyItem: HistoryItem = {
+  const addToHistory = (result: SentimentResult) => {
+    const newItem: AnalysisHistoryItem = {
       ...result,
-      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: Date.now().toString(),
       timestamp: new Date(),
     }
-
-    const updatedHistory = [historyItem, ...history].slice(0, 100) // Keep only last 100 items
-    setHistory(updatedHistory)
-    localStorage.setItem("sentiment_analysis_history", JSON.stringify(updatedHistory))
+    const newHistory = [newItem, ...history].slice(0, 100) // Keep only last 100 items
+    saveHistory(newHistory)
   }
 
   const clearHistory = () => {
-    setHistory([])
-    localStorage.removeItem("sentiment_analysis_history")
+    saveHistory([])
   }
 
   const deleteItem = (id: string) => {
-    const updatedHistory = history.filter((item) => item.id !== id)
-    setHistory(updatedHistory)
-    localStorage.setItem("sentiment_analysis_history", JSON.stringify(updatedHistory))
+    const newHistory = history.filter((item) => item.id !== id)
+    saveHistory(newHistory)
   }
 
   const exportHistory = () => {
-    if (filteredHistory.length === 0) return
-
     const csvContent = [
-      ["Timestamp", "Text", "Sentiment", "Confidence", "Positive Score", "Negative Score"],
-      ...filteredHistory.map((item) => [
-        item.timestamp.toISOString(),
-        `"${item.text.replace(/"/g, '""')}"`,
-        item.sentiment,
-        (item.confidence * 100).toFixed(2),
-        ((item.scores?.positive || 0) * 100).toFixed(2),
-        ((item.scores?.negative || 0) * 100).toFixed(2),
-      ]),
-    ]
-      .map((row) => row.join(","))
-      .join("\n")
+      ["Timestamp", "Text", "Sentiment", "Confidence", "Score"].join(","),
+      ...filteredHistory.map((item) =>
+        [
+          item.timestamp.toISOString(),
+          `"${item.text.replace(/"/g, '""')}"`,
+          item.sentiment.label,
+          (item.confidence * 100).toFixed(2) + "%",
+          item.sentiment.score.toFixed(4),
+        ].join(","),
+      ),
+    ].join("\n")
 
     const blob = new Blob([csvContent], { type: "text/csv" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `sentiment_history_${new Date().toISOString().split("T")[0]}.csv`
+    a.download = `sentiment-history-${new Date().toISOString().split("T")[0]}.csv`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
   }
 
-  const getSentimentColor = (sentiment: string) => {
-    switch (sentiment.toLowerCase()) {
-      case "positive":
-        return "bg-green-500"
-      case "negative":
-        return "bg-red-500"
+  const filteredHistory = history.filter((item) => {
+    const matchesSearch = item.text.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesFilter =
+      filterSentiment === "all" || item.sentiment.label.toLowerCase() === filterSentiment.toLowerCase()
+    return matchesSearch && matchesFilter
+  })
+
+  const getSentimentIcon = (label: string) => {
+    switch (label.toUpperCase()) {
+      case "POSITIVE":
+        return <ThumbsUp className="w-4 h-4 text-green-500" />
+      case "NEGATIVE":
+        return <ThumbsDown className="w-4 h-4 text-red-500" />
       default:
-        return "bg-gray-500"
+        return <Minus className="w-4 h-4 text-gray-500" />
     }
   }
 
-  const getSentimentIcon = (sentiment: string) => {
-    switch (sentiment.toLowerCase()) {
-      case "positive":
-        return <TrendingUp className="h-3 w-3" />
-      case "negative":
-        return <TrendingDown className="h-3 w-3" />
+  const getSentimentColor = (label: string) => {
+    switch (label.toUpperCase()) {
+      case "POSITIVE":
+        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
+      case "NEGATIVE":
+        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300"
       default:
-        return <MessageSquare className="h-3 w-3" />
+        return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300"
     }
   }
 
-  const getStats = () => {
-    const positive = history.filter((item) => item.sentiment.toLowerCase() === "positive").length
-    const negative = history.filter((item) => item.sentiment.toLowerCase() === "negative").length
-    const avgConfidence =
-      history.length > 0 ? history.reduce((sum, item) => sum + item.confidence, 0) / history.length : 0
-
-    return { positive, negative, total: history.length, avgConfidence }
-  }
-
-  const stats = getStats()
+  // Expose addToHistory function globally for other components to use
+  useEffect(() => {
+    ;(window as any).addToSentimentHistory = addToHistory
+  }, [history])
 
   return (
-    <div className="space-y-6">
-      {/* Header with Stats */}
+    <div className="max-w-4xl mx-auto space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <History className="h-5 w-5" />
-            Analysis History
-          </CardTitle>
-          <CardDescription>View and manage your sentiment analysis history</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="text-center p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
-              <div className="text-2xl font-bold text-blue-600">{stats.total}</div>
-              <div className="text-sm text-blue-600">Total Analyses</div>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <History className="w-5 h-5" />
+                Analysis History
+              </CardTitle>
+              <CardDescription>
+                View and manage your previous sentiment analyses ({history.length} total)
+              </CardDescription>
             </div>
-            <div className="text-center p-3 bg-green-50 dark:bg-green-950 rounded-lg">
-              <div className="text-2xl font-bold text-green-600">{stats.positive}</div>
-              <div className="text-sm text-green-600">Positive</div>
-            </div>
-            <div className="text-center p-3 bg-red-50 dark:bg-red-950 rounded-lg">
-              <div className="text-2xl font-bold text-red-600">{stats.negative}</div>
-              <div className="text-sm text-red-600">Negative</div>
-            </div>
-            <div className="text-center p-3 bg-purple-50 dark:bg-purple-950 rounded-lg">
-              <div className="text-2xl font-bold text-purple-600">{(stats.avgConfidence * 100).toFixed(1)}%</div>
-              <div className="text-sm text-purple-600">Avg Confidence</div>
+            <div className="flex gap-2">
+              {history.length > 0 && (
+                <>
+                  <Button variant="outline" onClick={exportHistory}>
+                    <Download className="w-4 h-4 mr-2" />
+                    Export
+                  </Button>
+                  <Button variant="outline" onClick={clearHistory}>
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Clear All
+                  </Button>
+                </>
+              )}
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Search and Filter */}
+          <div className="flex gap-4">
+            <div className="flex-1 relative">
+              <Search className="w-4 h-4 absolute left-3 top-3 text-gray-400" />
+              <Input
+                placeholder="Search analysis history..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-gray-400" />
+              <select
+                value={filterSentiment}
+                onChange={(e) => setFilterSentiment(e.target.value)}
+                className="px-3 py-2 border rounded-md bg-background"
+              >
+                <option value="all">All Sentiments</option>
+                <option value="positive">Positive</option>
+                <option value="negative">Negative</option>
+                <option value="neutral">Neutral</option>
+              </select>
+            </div>
+          </div>
 
-      {/* Filters and Controls */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <Input
-                  placeholder="Search analyses..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
+          {/* Statistics */}
+          {history.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                <div className="text-lg font-bold text-blue-600 dark:text-blue-400">{history.length}</div>
+                <div className="text-xs text-blue-600 dark:text-blue-400">Total</div>
+              </div>
+              <div className="text-center p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                <div className="text-lg font-bold text-green-600 dark:text-green-400">
+                  {history.filter((h) => h.sentiment.label.toUpperCase() === "POSITIVE").length}
+                </div>
+                <div className="text-xs text-green-600 dark:text-green-400">Positive</div>
+              </div>
+              <div className="text-center p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                <div className="text-lg font-bold text-red-600 dark:text-red-400">
+                  {history.filter((h) => h.sentiment.label.toUpperCase() === "NEGATIVE").length}
+                </div>
+                <div className="text-xs text-red-600 dark:text-red-400">Negative</div>
+              </div>
+              <div className="text-center p-3 bg-gray-50 dark:bg-gray-900/20 rounded-lg">
+                <div className="text-lg font-bold text-gray-600 dark:text-gray-400">
+                  {history.filter((h) => !["POSITIVE", "NEGATIVE"].includes(h.sentiment.label.toUpperCase())).length}
+                </div>
+                <div className="text-xs text-gray-600 dark:text-gray-400">Neutral</div>
               </div>
             </div>
+          )}
 
-            <Select value={sentimentFilter} onValueChange={setSentimentFilter}>
-              <SelectTrigger className="w-full md:w-40">
-                <Filter className="h-4 w-4 mr-2" />
-                <SelectValue placeholder="Filter by sentiment" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Sentiments</SelectItem>
-                <SelectItem value="positive">Positive</SelectItem>
-                <SelectItem value="negative">Negative</SelectItem>
-              </SelectContent>
-            </Select>
+          <Separator />
 
-            <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="w-full md:w-40">
-                <SelectValue placeholder="Sort by" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="newest">Newest First</SelectItem>
-                <SelectItem value="oldest">Oldest First</SelectItem>
-                <SelectItem value="confidence">Confidence</SelectItem>
-                <SelectItem value="text">Text A-Z</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <div className="flex gap-2">
-              <Button onClick={exportHistory} variant="outline" disabled={filteredHistory.length === 0}>
-                <Download className="h-4 w-4 mr-2" />
-                Export
-              </Button>
-              <Button onClick={clearHistory} variant="outline" disabled={history.length === 0}>
-                <Trash2 className="h-4 w-4 mr-2" />
-                Clear All
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* History List */}
-      {filteredHistory.length === 0 ? (
-        <Card>
-          <CardContent className="pt-6">
+          {/* History Items */}
+          {filteredHistory.length === 0 ? (
             <div className="text-center py-8">
-              <History className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No analysis history</h3>
-              <p className="text-gray-500 dark:text-gray-400">
+              <History className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
+                {history.length === 0 ? "No Analysis History" : "No Results Found"}
+              </h3>
+              <p className="text-gray-600 dark:text-gray-400">
                 {history.length === 0
-                  ? "Start analyzing text to build your history"
-                  : "No results match your current filters"}
+                  ? "Start analyzing text to build your history."
+                  : "Try adjusting your search or filter criteria."}
               </p>
             </div>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {filteredHistory.map((item) => (
-            <Card key={item.id}>
-              <CardContent className="pt-6">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 space-y-2">
-                    <div className="flex items-center gap-2 text-sm text-gray-500">
-                      <Calendar className="h-3 w-3" />
-                      <span>{item.timestamp.toLocaleString()}</span>
-                    </div>
-
-                    <p className="text-sm">
-                      {item.text.length > 200 ? `${item.text.substring(0, 200)}...` : item.text}
-                    </p>
-
-                    <div className="flex items-center gap-4 text-xs text-gray-500">
-                      <span>Confidence: {(item.confidence * 100).toFixed(1)}%</span>
-                      {item.scores && (
-                        <>
-                          <span>Positive: {((item.scores.positive || 0) * 100).toFixed(1)}%</span>
-                          <span>Negative: {((item.scores.negative || 0) * 100).toFixed(1)}%</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <Badge className={`${getSentimentColor(item.sentiment)} text-white flex items-center gap-1`}>
-                      {getSentimentIcon(item.sentiment)}
-                      {item.sentiment.charAt(0).toUpperCase() + item.sentiment.slice(1)}
-                    </Badge>
-
+          ) : (
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {filteredHistory.map((item) => (
+                <div key={item.id} className="p-4 border rounded-lg space-y-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <p className="text-sm flex-1">{item.text}</p>
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => deleteItem(item.id)}
                       className="text-red-500 hover:text-red-700"
                     >
-                      <Trash2 className="h-3 w-3" />
+                      <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {getSentimentIcon(item.sentiment.label)}
+                      <Badge className={getSentimentColor(item.sentiment.label)}>{item.sentiment.label}</Badge>
+                      <span className="text-sm text-muted-foreground">
+                        {(item.confidence * 100).toFixed(1)}% confidence
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Calendar className="w-3 h-3" />
+                      {item.timestamp.toLocaleDateString()} {item.timestamp.toLocaleTimeString()}
+                    </div>
+                  </div>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

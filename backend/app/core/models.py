@@ -16,8 +16,61 @@ from transformers import (
     Pipeline
 )
 from .config import settings
+from pydantic import BaseModel, Field, ConfigDict
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+class SentimentLabel(str, Enum):
+    POSITIVE = "POSITIVE"
+    NEGATIVE = "NEGATIVE"
+    NEUTRAL = "NEUTRAL"
+
+class PredictRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=10000, description="Text to analyze")
+
+class BatchPredictRequest(BaseModel):
+    texts: List[str] = Field(..., min_items=1, max_items=100, description="List of texts to analyze")
+
+class SentimentLabelModel(BaseModel):
+    label: str = Field(..., description="Sentiment label (POSITIVE, NEGATIVE, etc.)")
+    score: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
+
+class PredictResponse(BaseModel):
+    text: str = Field(..., description="Original text")
+    sentiment: SentimentLabelModel = Field(..., description="Predicted sentiment")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Overall confidence")
+    processing_time: float = Field(..., ge=0.0, description="Processing time in seconds")
+    scores: Optional[Dict[str, float]] = Field(None, description="All label scores")
+
+class BatchPredictResponse(BaseModel):
+    results: List[PredictResponse] = Field(..., description="List of prediction results")
+    total_processing_time: float = Field(..., ge=0.0, description="Total processing time in seconds")
+    average_processing_time: float = Field(..., ge=0.0, description="Average processing time per text")
+
+class ModelInfoResponse(BaseModel):
+    name: str = Field(..., description="Model name")
+    framework: str = Field(..., description="ML framework")
+    device: str = Field(..., description="Device (CPU/GPU)")
+    quantized: bool = Field(..., description="Whether model is quantized")
+    version: str = Field(..., description="Model version")
+
+class HealthResponse(BaseModel):
+    status: str = Field(..., description="Service status")
+    service: str = Field(..., description="Service name")
+    model_loaded: bool = Field(..., description="Whether model is loaded")
+    timestamp: str = Field(..., description="Timestamp of health check")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": "healthy",
+                "service": "sentiment-analysis-api",
+                "model_loaded": True,
+                "timestamp": "2024-01-01T00:00:00Z"
+            }
+        }
+    )
 
 class ModelManager:
     """Manages ML model loading, inference, and hot-reload functionality"""
@@ -28,85 +81,48 @@ class ModelManager:
         self.pipeline: Optional[Pipeline] = None
         self.model_info = {}
         self.load_time = 0
+        self.device = None
         self._lock = asyncio.Lock()
     
     async def load_model(self, model_path: Optional[str] = None) -> bool:
         """Load model from local path or HuggingFace Hub"""
         async with self._lock:
             try:
+                from ..core.config import settings
+                
+                logger.info(f"Loading model: {settings.model_name}")
                 start_time = time.time()
                 
-                # Determine model source
-                if model_path and os.path.exists(model_path):
-                    model_source = model_path
-                    logger.info(f"Loading local model from {model_path}")
-                elif os.path.exists(settings.local_model_path):
-                    model_source = settings.local_model_path
-                    logger.info(f"Loading local model from {settings.local_model_path}")
-                else:
-                    model_source = settings.model_name
-                    logger.info(f"Loading model from HuggingFace Hub: {model_source}")
-                
                 # Determine device
-                device = self._get_device()
-                logger.info(f"Using device: {device}")
-                
-                # Load tokenizer and model directly
-                self.tokenizer = AutoTokenizer.from_pretrained(model_source)
-                
-                # Load model based on framework
-                if settings.ml_framework == "pytorch":
-                    self.model = AutoModelForSequenceClassification.from_pretrained(
-                        model_source,
-                        torch_dtype=torch.float16 if device != "cpu" else torch.float32
-                    )
-                    self.model.to(device)
-                    self.model.eval()
+                if settings.device == "auto":
+                    self.device = "cuda" if torch.cuda.is_available() else "cpu"
+                else:
+                    self.device = settings.device
                     
-                    # Create pipeline
-                    self.pipeline = pipeline(
-                        "text-classification",
-                        model=self.model,
-                        tokenizer=self.tokenizer,
-                        device=0 if device == "cuda" else -1,
-                        return_all_scores=True
-                    )
-                    
-                elif settings.ml_framework == "tensorflow":
-                    self.model = AutoModelForSequenceClassification.from_pretrained(
-                        model_source
-                    )
-                    
-                    # Create pipeline
-                    self.pipeline = pipeline(
-                        "text-classification",
-                        model=self.model,
-                        tokenizer=self.tokenizer,
-                        framework="tf",
-                        return_all_scores=True
-                    )
+                logger.info(f"Using device: {self.device}")
                 
-                # Apply quantization if enabled
-                if settings.enable_quantization:
-                    self.model = self._apply_quantization(self.model)
+                # Load model and tokenizer
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    settings.model_name,
+                    cache_dir=settings.cache_dir
+                )
                 
-                # Store load time
+                self.model = AutoModelForSequenceClassification.from_pretrained(
+                    settings.model_name,
+                    cache_dir=settings.cache_dir
+                )
+                
+                # Create pipeline
+                self.pipeline = pipeline(
+                    "sentiment-analysis",
+                    model=self.model,
+                    tokenizer=self.tokenizer,
+                    device=0 if self.device == "cuda" else -1,
+                    return_all_scores=True
+                )
+                
                 self.load_time = time.time() - start_time
-                
-                # Update model info
-                self.model_info = {
-                    "name": model_source,
-                    "framework": settings.ml_framework,
-                    "device": str(device),
-                    "load_time": self.load_time,
-                    "quantized": settings.enable_quantization,
-                    "parameters": sum(p.numel() for p in self.model.parameters()) if self.model else 0,
-                    "model_size_mb": sum(p.numel() * p.element_size() for p in self.model.parameters()) / 1024 / 1024 if self.model else 0
-                }
-                
                 logger.info(f"Model loaded successfully in {self.load_time:.2f}s")
-                logger.info(f"Model parameters: {self.model_info['parameters']:,}")
-                logger.info(f"Model size: {self.model_info['model_size_mb']:.2f} MB")
                 
                 return True
                 
@@ -114,40 +130,30 @@ class ModelManager:
                 logger.error(f"Failed to load model: {str(e)}")
                 return False
     
-    async def reload_model(self) -> bool:
-        """Reload model (used by hot-reload)"""
+    def is_loaded(self) -> bool:
+        """Check if model is loaded"""
+        return self.pipeline is not None
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get current model information"""
+        from ..core.config import settings
+        
+        return {
+            "name": settings.model_name,
+            "framework": "transformers",
+            "device": self.device or "unknown",
+            "quantized": settings.quantized,
+            "load_time": self.load_time,
+            "version": settings.model_version
+        }
+    
+    async def reload_model(self):
+        """Reload the model"""
         logger.info("Reloading model...")
+        self.pipeline = None
+        self.model = None
+        self.tokenizer = None
         return await self.load_model()
-    
-    def _get_device(self) -> str:
-        """Determine the best available device"""
-        if settings.device == "cuda" and torch.cuda.is_available():
-            return "cuda"
-        elif settings.device == "mps" and torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"
-    
-    def _apply_quantization(self, model):
-        """Apply model quantization based on backend"""
-        try:
-            if settings.quantization_backend == "bitsandbytes" and settings.ml_framework == "pytorch":
-                from bitsandbytes import quantize_8bit
-                model = quantize_8bit(model)
-                logger.info("Applied bitsandbytes 8-bit quantization")
-                
-            elif settings.quantization_backend == "onnx":
-                # ONNX quantization would be implemented here
-                logger.info("ONNX quantization not implemented in this demo")
-                
-            elif settings.quantization_backend == "tensorrt":
-                # TensorRT quantization would be implemented here
-                logger.info("TensorRT quantization not implemented in this demo")
-                
-            return model
-                
-        except Exception as e:
-            logger.warning(f"Quantization failed: {str(e)}")
-            return model
     
     async def predict(self, texts: List[str]) -> List[Dict[str, Any]]:
         """Predict sentiment for a list of texts"""
@@ -155,8 +161,10 @@ class ModelManager:
             raise RuntimeError("Model not loaded")
         
         try:
+            start_time = time.time()
             # Run inference
             results = self.pipeline(texts)
+            end_time = time.time()
             
             # Process results
             processed_results = []
@@ -168,16 +176,16 @@ class ModelManager:
                 for item in result:
                     label = item['label'].lower()
                     if label in ['positive', 'pos']:
-                        sentiment_scores['positive'] = item['score']
+                        sentiment_scores[SentimentLabel.POSITIVE] = item['score']
                     elif label in ['negative', 'neg']:
-                        sentiment_scores['negative'] = item['score']
+                        sentiment_scores[SentimentLabel.NEGATIVE] = item['score']
                     else:
                         sentiment_scores[label] = item['score']
                 
                 # Determine overall sentiment
-                if 'positive' in sentiment_scores and 'negative' in sentiment_scores:
-                    overall_sentiment = 'positive' if sentiment_scores['positive'] > sentiment_scores['negative'] else 'negative'
-                    confidence = max(sentiment_scores['positive'], sentiment_scores['negative'])
+                if SentimentLabel.POSITIVE in sentiment_scores and SentimentLabel.NEGATIVE in sentiment_scores:
+                    overall_sentiment = SentimentLabel.POSITIVE if sentiment_scores[SentimentLabel.POSITIVE] > sentiment_scores[SentimentLabel.NEGATIVE] else SentimentLabel.NEGATIVE
+                    confidence = max(sentiment_scores[SentimentLabel.POSITIVE], sentiment_scores[SentimentLabel.NEGATIVE])
                 else:
                     # Fallback for other label formats
                     max_item = max(result, key=lambda x: x['score'])
@@ -186,9 +194,11 @@ class ModelManager:
                 
                 processed_results.append({
                     'text': text,
-                    'sentiment': overall_sentiment,
+                    'sentiment': SentimentLabelModel(label=overall_sentiment.upper(), score=confidence),
                     'confidence': confidence,
-                    'scores': sentiment_scores
+                    'processing_time': end_time - start_time,
+                    'scores': sentiment_scores,
+                    'timestamp': datetime.utcnow().isoformat()
                 })
             
             return processed_results
@@ -196,14 +206,6 @@ class ModelManager:
         except Exception as e:
             logger.error(f"Prediction failed: {str(e)}")
             raise
-    
-    def get_model_info(self) -> Dict[str, Any]:
-        """Get current model information"""
-        return self.model_info.copy()
-    
-    def is_loaded(self) -> bool:
-        """Check if model is loaded"""
-        return self.pipeline is not None
 
 # Global model manager instance
 model_manager = ModelManager()

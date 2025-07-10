@@ -1,159 +1,180 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Loader2, Zap, TrendingUp, TrendingDown, MessageSquare } from "lucide-react"
-import { useSentiment } from "@/hooks/useSentiment"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
+import { Keyboard, Zap, ThumbsUp, ThumbsDown, Minus } from "lucide-react"
 import { useDebounce } from "@/hooks/useDebounce"
-import type { SentimentResult } from "@/types/sentiment"
+import { useSentiment } from "@/hooks/useSentiment"
+import type { SentimentResult } from "@/lib/api"
 
-export function LiveTypingInference() {
+export default function LiveTypingInference() {
   const [text, setText] = useState("")
+  const [isEnabled, setIsEnabled] = useState(true)
   const [result, setResult] = useState<SentimentResult | null>(null)
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
-  const { analyzeSentiment, error } = useSentiment()
-
-  // Debounce the text input to avoid too many API calls
-  const debouncedText = useDebounce(text, 1000)
+  const debouncedText = useDebounce(text, 500)
+  const { analyzeSentiment, loading } = useSentiment()
 
   useEffect(() => {
-    const analyzeText = async () => {
-      if (!debouncedText.trim() || debouncedText.length < 10) {
-        setResult(null)
-        return
-      }
-
-      setIsAnalyzing(true)
-      try {
-        const analysisResult = await analyzeSentiment(debouncedText)
-        setResult(analysisResult)
-      } catch (err) {
-        console.error("Live analysis failed:", err)
-        setResult(null)
-      } finally {
-        setIsAnalyzing(false)
-      }
+    if (debouncedText.trim() && isEnabled && debouncedText.length > 10) {
+      analyzeSentiment(debouncedText).then(setResult).catch(console.error)
+    } else {
+      setResult(null)
     }
+  }, [debouncedText, isEnabled, analyzeSentiment])
 
-    analyzeText()
-  }, [debouncedText, analyzeSentiment])
-
-  const getSentimentColor = (sentiment: string) => {
-    switch (sentiment.toLowerCase()) {
-      case "positive":
-        return "bg-green-500"
-      case "negative":
-        return "bg-red-500"
+  const getSentimentIcon = (label: string) => {
+    switch (label.toUpperCase()) {
+      case "POSITIVE":
+        return <ThumbsUp className="w-4 h-4 text-green-500" />
+      case "NEGATIVE":
+        return <ThumbsDown className="w-4 h-4 text-red-500" />
       default:
-        return "bg-gray-500"
+        return <Minus className="w-4 h-4 text-gray-500" />
     }
   }
 
-  const getSentimentIcon = (sentiment: string) => {
-    switch (sentiment.toLowerCase()) {
-      case "positive":
-        return <TrendingUp className="h-4 w-4" />
-      case "negative":
-        return <TrendingDown className="h-4 w-4" />
+  const getSentimentColor = (label: string) => {
+    switch (label.toUpperCase()) {
+      case "POSITIVE":
+        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
+      case "NEGATIVE":
+        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300"
       default:
-        return <MessageSquare className="h-4 w-4" />
+        return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300"
     }
   }
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Zap className="h-5 w-5" />
-            Live Sentiment Analysis
-          </CardTitle>
-          <CardDescription>Start typing to see real-time sentiment analysis (minimum 10 characters)</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Textarea
-            placeholder="Start typing your text here..."
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            className="min-h-[150px]"
-          />
-
-          <div className="mt-4 flex items-center justify-between text-sm text-gray-500">
-            <span>Characters: {text.length}</span>
-            {isAnalyzing && (
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                <span>Analyzing...</span>
-              </div>
-            )}
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Keyboard className="w-5 h-5" />
+                Live Typing Inference
+              </CardTitle>
+              <CardDescription>Real-time sentiment analysis as you type (minimum 10 characters)</CardDescription>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Switch id="live-mode" checked={isEnabled} onCheckedChange={setIsEnabled} />
+              <Label htmlFor="live-mode">Live Analysis</Label>
+            </div>
           </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="relative">
+            <Textarea
+              placeholder="Start typing to see real-time sentiment analysis..."
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={6}
+              className="resize-none"
+            />
+            <div className="flex items-center justify-between mt-2 text-sm text-muted-foreground">
+              <span>{text.length}/2000 characters</span>
+              {loading && (
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 animate-pulse text-blue-500" />
+                  <span>Analyzing...</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {!isEnabled && (
+            <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+              <p className="text-yellow-800 dark:text-yellow-300 text-sm">
+                Live analysis is disabled. Toggle the switch above to enable real-time inference.
+              </p>
+            </div>
+          )}
+
+          {text.length > 0 && text.length <= 10 && isEnabled && (
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
+              <p className="text-blue-800 dark:text-blue-300 text-sm">
+                Type at least 10 characters to start live analysis...
+              </p>
+            </div>
+          )}
+
+          {result && isEnabled && (
+            <Card className="border-2 border-dashed border-blue-200 dark:border-blue-800">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  {getSentimentIcon(result.sentiment.label)}
+                  Live Analysis Result
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">Sentiment:</span>
+                  <Badge className={getSentimentColor(result.sentiment.label)}>{result.sentiment.label}</Badge>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">Confidence:</span>
+                  <span className="font-semibold">{(result.confidence * 100).toFixed(1)}%</span>
+                </div>
+
+                <div className="space-y-1">
+                  <Progress value={result.confidence * 100} className="h-2" />
+                </div>
+
+                <div className="text-xs text-muted-foreground">
+                  Analysis time: {(result.processing_time * 1000).toFixed(0)}ms
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </CardContent>
       </Card>
 
-      {error && (
-        <Card className="border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950">
-          <CardContent className="pt-6">
-            <p className="text-red-600 dark:text-red-400">{error}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {result && (
-        <Card className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-green-800 dark:text-green-200">
-              {getSentimentIcon(result.sentiment)}
-              Live Analysis Result
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Sentiment:</span>
-              <Badge className={`${getSentimentColor(result.sentiment)} text-white`}>
-                {result.sentiment.charAt(0).toUpperCase() + result.sentiment.slice(1)}
-              </Badge>
+      <Card>
+        <CardHeader>
+          <CardTitle>How Live Typing Works</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-xs font-semibold text-blue-600 dark:text-blue-400">
+              1
             </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span>Confidence:</span>
-                <span className="font-medium">{(result.confidence * 100).toFixed(1)}%</span>
-              </div>
-              <Progress value={result.confidence * 100} className="h-2" />
+            <div>
+              <p className="font-medium">Type Your Text</p>
+              <p className="text-sm text-muted-foreground">
+                Start typing in the text area above (minimum 10 characters required)
+              </p>
             </div>
-
-            {result.scores && (
-              <div className="space-y-3">
-                <h4 className="text-sm font-medium">Score Breakdown:</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  {Object.entries(result.scores).map(([label, score]) => (
-                    <div key={label} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="capitalize font-medium">{label}</span>
-                        <span>{(score * 100).toFixed(1)}%</span>
-                      </div>
-                      <Progress value={score * 100} className="h-1" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {text.length > 0 && text.length < 10 && (
-        <Card className="border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950">
-          <CardContent className="pt-6">
-            <p className="text-yellow-600 dark:text-yellow-400 text-sm">
-              Please enter at least 10 characters for analysis
-            </p>
-          </CardContent>
-        </Card>
-      )}
+          </div>
+          <div className="flex items-start gap-3">
+            <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-xs font-semibold text-blue-600 dark:text-blue-400">
+              2
+            </div>
+            <div>
+              <p className="font-medium">Automatic Analysis</p>
+              <p className="text-sm text-muted-foreground">
+                The system waits 500ms after you stop typing, then analyzes your text
+              </p>
+            </div>
+          </div>
+          <div className="flex items-start gap-3">
+            <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-xs font-semibold text-blue-600 dark:text-blue-400">
+              3
+            </div>
+            <div>
+              <p className="font-medium">Real-time Results</p>
+              <p className="text-sm text-muted-foreground">
+                See sentiment analysis results update in real-time as you modify your text
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

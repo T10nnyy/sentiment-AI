@@ -2,21 +2,20 @@
  * TypeScript type definitions for sentiment analysis
  */
 
+export interface SentimentScore {
+  label: "POSITIVE" | "NEGATIVE" | "NEUTRAL"
+  score: number
+}
+
 export interface SentimentResult {
   text: string
-  sentiment: string
-  confidence: number
-  scores?: {
-    positive?: number
-    negative?: number
-    [key: string]: number | undefined
-  }
-  processing_time?: number
+  sentiment: SentimentScore
+  processing_time: number
+  timestamp: string
 }
 
 export interface BatchSentimentRequest {
   texts: string[]
-  model_name?: string
 }
 
 export interface BatchSentimentResponse {
@@ -27,7 +26,6 @@ export interface BatchSentimentResponse {
 
 export interface SentimentRequest {
   text: string
-  model_name?: string
 }
 
 export interface ModelInfo {
@@ -54,6 +52,12 @@ export interface ModelInfo {
     batch_size: number
     hot_reload: boolean
   }
+  version: string
+  ml_framework: string
+  max_sequence_length: number
+  supported_languages: string[]
+  model_size: string
+  last_updated: string
 }
 
 export interface ApiError {
@@ -148,6 +152,14 @@ export interface HealthStatus {
   status: string
   model_loaded: boolean
   model_info: ModelInfo
+  memory_usage: {
+    total: number
+    available: number
+    percent: number
+    used: number
+  }
+  uptime: number
+  version: string
 }
 
 export interface PredictRequest {

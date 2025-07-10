@@ -4,7 +4,7 @@ const httpLink = createHttpLink({
   uri: process.env.NEXT_PUBLIC_GRAPHQL_URL || "http://localhost:8000/graphql",
 })
 
-export const client = new ApolloClient({
+export const apolloClient = new ApolloClient({
   link: httpLink,
   cache: new InMemoryCache(),
   defaultOptions: {
