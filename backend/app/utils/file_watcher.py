@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from .config import settings
+from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 

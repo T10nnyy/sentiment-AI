@@ -1,92 +1,51 @@
-import axios from "axios"
-import type {
-  SentimentResult,
-  BatchPredictionRequest,
-  BatchPredictionResponse,
-  PredictionRequest,
-  ModelInfo,
-  HealthCheck,
-} from "@/types/sentiment"
-
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
-export const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    "Content-Type": "application/json",
-  },
-})
+export class ApiClient {
+  private baseUrl: string
 
-// Request interceptor
-api.interceptors.request.use(
-  (config) => {
-    // Add auth token if available
-    const token = localStorage.getItem("auth_token")
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  (error) => {
-    return Promise.reject(error)
-  },
-)
+  constructor(baseUrl: string = API_BASE_URL) {
+    this.baseUrl = baseUrl
+  }
 
-// Response interceptor
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      // Handle unauthorized access
-      localStorage.removeItem("auth_token")
-      window.location.href = "/login"
-    }
-    return Promise.reject(error)
-  },
-)
+  async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const url = `${this.baseUrl}${endpoint}`
 
-class RestApi {
-  private async request<T>(endpoint: string, options?: any): Promise<T> {
-    const response = await api.request<T>({
-      url: endpoint,
-      method: options?.method,
-      data: options?.body,
+    const config: RequestInit = {
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
       ...options,
-    })
-
-    if (!response.status) {
-      const errorData = response.data || { detail: "Request failed" }
-      throw {
-        detail: errorData.detail || `HTTP ${response.status}`,
-        status: response.status,
-      }
     }
 
-    return response.data
+    const response = await fetch(url, config)
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: "Unknown error" }))
+      throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    return response.json()
   }
 
-  async predict(data: PredictionRequest): Promise<SentimentResult> {
-    return this.request<SentimentResult>("/predict", {
+  async get<T>(endpoint: string): Promise<T> {
+    return this.request<T>(endpoint, { method: "GET" })
+  }
+
+  async post<T>(endpoint: string, data?: any): Promise<T> {
+    return this.request<T>(endpoint, {
       method: "POST",
-      body: data,
+      body: data ? JSON.stringify(data) : undefined,
     })
   }
 
-  async predictBatch(data: BatchPredictionRequest): Promise<BatchPredictionResponse> {
-    return this.request<BatchPredictionResponse>("/predict/batch", {
+  async postFormData<T>(endpoint: string, formData: FormData): Promise<T> {
+    return this.request<T>(endpoint, {
       method: "POST",
-      body: data,
+      headers: {}, // Let browser set Content-Type for FormData
+      body: formData,
     })
-  }
-
-  async getModelInfo(): Promise<ModelInfo> {
-    return this.request<ModelInfo>("/model/info")
-  }
-
-  async healthCheck(): Promise<HealthCheck> {
-    return this.request<HealthCheck>("/health")
   }
 }
 
-// Exporting the instance of RestApi
-export const restApi = new RestApi()
+export const apiClient = new ApiClient()

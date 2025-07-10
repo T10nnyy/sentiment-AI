@@ -1,100 +1,130 @@
 "use client"
 
 import { useState, useCallback } from "react"
-import { api } from "@/lib/api"
-import type { SentimentResult, BatchResult, AnalysisHistoryItem, ModelInfo } from "@/types/sentiment"
+import type { SentimentResult, BatchSentimentResult } from "@/types/sentiment"
+import { useToast } from "@/hooks/use-toast"
 
 export function useSentiment() {
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const { toast } = useToast()
 
-  const analyzeSentiment = useCallback(async (text: string): Promise<SentimentResult> => {
-    setLoading(true)
-    try {
-      const response = await api.post("/analyze", { text })
-      return response.data
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  const analyzeBatch = useCallback(
-    async (formData: FormData, onProgress?: (progress: number) => void): Promise<BatchResult> => {
+  const analyzeSentiment = useCallback(
+    async (text: string): Promise<SentimentResult> => {
       setLoading(true)
+      setError(null)
+
       try {
-        const response = await api.post("/batch", formData, {
+        const response = await fetch("/api/v1/analyze", {
+          method: "POST",
           headers: {
-            "Content-Type": "multipart/form-data",
+            "Content-Type": "application/json",
           },
-          onUploadProgress: (progressEvent) => {
-            if (progressEvent.total && onProgress) {
-              const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
-              onProgress(progress)
-            }
-          },
+          body: JSON.stringify({ text }),
         })
-        return response.data
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: "Unknown error" }))
+          throw new Error(errorData.detail || `HTTP ${response.status}`)
+        }
+
+        const result = await response.json()
+        return result
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : "Analysis failed"
+        setError(errorMessage)
+        toast({
+          title: "Analysis Failed",
+          description: errorMessage,
+          variant: "destructive",
+        })
+        throw err
       } finally {
         setLoading(false)
       }
     },
-    [],
+    [toast],
   )
 
-  const getModelInfo = useCallback(async (): Promise<ModelInfo> => {
-    const response = await api.get("/model/info")
-    return response.data
-  }, [])
+  const analyzeBatch = useCallback(
+    async (texts: string[]): Promise<SentimentResult[]> => {
+      setLoading(true)
+      setError(null)
+
+      try {
+        const response = await fetch("/api/v1/analyze/batch", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ texts }),
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: "Unknown error" }))
+          throw new Error(errorData.detail || `HTTP ${response.status}`)
+        }
+
+        const result: BatchSentimentResult = await response.json()
+        return result.results
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : "Batch analysis failed"
+        setError(errorMessage)
+        toast({
+          title: "Batch Analysis Failed",
+          description: errorMessage,
+          variant: "destructive",
+        })
+        throw err
+      } finally {
+        setLoading(false)
+      }
+    },
+    [toast],
+  )
+
+  const analyzeFile = useCallback(
+    async (file: File): Promise<SentimentResult[]> => {
+      setLoading(true)
+      setError(null)
+
+      try {
+        const formData = new FormData()
+        formData.append("file", file)
+
+        const response = await fetch("/api/v1/analyze/file", {
+          method: "POST",
+          body: formData,
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: "Unknown error" }))
+          throw new Error(errorData.detail || `HTTP ${response.status}`)
+        }
+
+        const result = await response.json()
+        return result.results
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : "File analysis failed"
+        setError(errorMessage)
+        toast({
+          title: "File Analysis Failed",
+          description: errorMessage,
+          variant: "destructive",
+        })
+        throw err
+      } finally {
+        setLoading(false)
+      }
+    },
+    [toast],
+  )
 
   return {
     analyzeSentiment,
     analyzeBatch,
-    getModelInfo,
+    analyzeFile,
     loading,
-  }
-}
-
-export function useAnalysisHistory() {
-  const [history, setHistory] = useState<AnalysisHistoryItem[]>([])
-  const [loading, setLoading] = useState(false)
-
-  const fetchHistory = useCallback(async () => {
-    setLoading(true)
-    try {
-      const response = await api.get("/history")
-      setHistory(response.data)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  const clearHistory = useCallback(async () => {
-    await api.delete("/history")
-    setHistory([])
-  }, [])
-
-  const deleteItem = useCallback(async (id: string) => {
-    await api.delete(`/history/${id}`)
-    setHistory((prev) => prev.filter((item) => item.id !== id))
-  }, [])
-
-  const exportHistory = useCallback(async () => {
-    const response = await api.get("/history/export", { responseType: "blob" })
-    const url = window.URL.createObjectURL(new Blob([response.data]))
-    const link = document.createElement("a")
-    link.href = url
-    link.setAttribute("download", "sentiment_history.csv")
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    window.URL.revokeObjectURL(url)
-  }, [])
-
-  return {
-    history,
-    loading,
-    fetchHistory,
-    clearHistory,
-    deleteItem,
-    exportHistory,
+    error,
   }
 }

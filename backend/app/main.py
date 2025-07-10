@@ -5,9 +5,9 @@ FastAPI + GraphQL Application Entry Point
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from strawberry.fastapi import GraphQLRouter
+from fastapi.responses import JSONResponse
 import uvicorn
 
 from .core.config import settings
@@ -15,7 +15,7 @@ from .core.models import model_manager
 from .services.inference import inference_service
 from .utils.file_watcher import FileWatcher
 from .api.rest import router as rest_router
-from .api.graphql_schema import schema
+from .api.graphql_schema import graphql_app
 
 # Configure logging
 logging.basicConfig(
@@ -83,11 +83,10 @@ app.add_middleware(
 )
 
 # Add REST routes
-app.include_router(rest_router)
+app.include_router(rest_router, prefix="/api/v1")
 
 # Add GraphQL route
-graphql_app = GraphQLRouter(schema)
-app.include_router(graphql_app, prefix="/graphql")
+app.mount("/graphql", graphql_app)
 
 # Metrics endpoint (basic implementation)
 @app.get("/metrics")
@@ -102,10 +101,37 @@ async def metrics():
         "quantized": 1 if model_info.get("quantized", False) else 0
     }
 
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "model_loaded": model_manager.pipeline is not None,
+        "model_info": model_manager.get_model_info()
+    }
+
+# Root endpoint
+@app.get("/")
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "message": "Sentiment Analysis Microservice",
+        "version": "1.0.0",
+        "model": settings.model_name,
+        "endpoints": {
+            "health": "/health",
+            "rest_api": "/api/v1",
+            "graphql": "/graphql",
+            "docs": "/docs"
+        }
+    }
+
 if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host=settings.api_host,
         port=settings.api_port,
-        reload=settings.debug
+        reload=settings.debug,
+        log_level="info"
     )

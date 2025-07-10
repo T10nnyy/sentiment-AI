@@ -1,67 +1,121 @@
 """
-GraphQL Schema using Strawberry
+GraphQL Schema and Resolvers
 """
 
-import strawberry
-from typing import List
 import logging
+from typing import List, Optional
+import strawberry
+from strawberry.fastapi import GraphQLRouter
+
 from ..services.inference import inference_service
+from ..core.models import model_manager
 
 logger = logging.getLogger(__name__)
 
+# GraphQL Types
+@strawberry.type
+class SentimentScores:
+    positive: float
+    negative: float
+
 @strawberry.type
 class SentimentResult:
-    label: str
-    score: float
+    text: str
+    sentiment: str
+    confidence: float
+    scores: SentimentScores
 
 @strawberry.type
 class ModelInfo:
     name: str
     framework: str
-    quantized: bool
     device: str
+    load_time: float
+    quantized: bool
+    parameters: int
+    model_size_mb: float
 
+@strawberry.input
+class SentimentInput:
+    text: str
+
+@strawberry.input
+class BatchSentimentInput:
+    texts: List[str]
+
+# Resolvers
 @strawberry.type
 class Query:
     @strawberry.field
-    async def predict(self, text: str) -> SentimentResult:
-        """Predict sentiment for a single text"""
-        try:
-            result = await inference_service.predict_single(text)
-            return SentimentResult(
-                label=result["label"],
-                score=result["score"]
-            )
-        except Exception as e:
-            logger.error(f"GraphQL prediction failed: {str(e)}")
-            raise
-    
-    @strawberry.field
-    async def batch_predict(self, texts: List[str]) -> List[SentimentResult]:
-        """Predict sentiment for multiple texts"""
-        try:
-            results = await inference_service.predict_batch(texts)
-            return [
-                SentimentResult(label=result["label"], score=result["score"])
-                for result in results
-            ]
-        except Exception as e:
-            logger.error(f"GraphQL batch prediction failed: {str(e)}")
-            raise
-    
-    @strawberry.field
     async def model_info(self) -> ModelInfo:
-        """Get current model information"""
+        """Get model information"""
         try:
-            info = inference_service.get_model_info()
+            if not model_manager.is_loaded():
+                raise Exception("Model not loaded")
+            
+            info = model_manager.get_model_info()
             return ModelInfo(
-                name=info.get("name", "unknown"),
-                framework=info.get("framework", "unknown"),
-                quantized=info.get("quantized", False),
-                device=info.get("device", "cpu")
+                name=info['name'],
+                framework=info['framework'],
+                device=info['device'],
+                load_time=info['load_time'],
+                quantized=info['quantized'],
+                parameters=info['parameters'],
+                model_size_mb=info['model_size_mb']
             )
         except Exception as e:
             logger.error(f"GraphQL model info failed: {str(e)}")
             raise
 
-schema = strawberry.Schema(query=Query)
+@strawberry.type
+class Mutation:
+    @strawberry.mutation
+    async def analyze_sentiment(self, input: SentimentInput) -> SentimentResult:
+        """Analyze sentiment of a single text"""
+        try:
+            results = await inference_service.predict([input.text])
+            result = results[0]
+            
+            return SentimentResult(
+                text=result['text'],
+                sentiment=result['sentiment'],
+                confidence=result['confidence'],
+                scores=SentimentScores(
+                    positive=result['scores'].get('positive', 0),
+                    negative=result['scores'].get('negative', 0)
+                )
+            )
+        except Exception as e:
+            logger.error(f"GraphQL sentiment analysis failed: {str(e)}")
+            raise
+    
+    @strawberry.mutation
+    async def analyze_batch_sentiment(self, input: BatchSentimentInput) -> List[SentimentResult]:
+        """Analyze sentiment of multiple texts"""
+        try:
+            if len(input.texts) > 100:
+                raise Exception("Batch size too large (max 100)")
+            
+            results = await inference_service.predict(input.texts)
+            
+            return [
+                SentimentResult(
+                    text=result['text'],
+                    sentiment=result['sentiment'],
+                    confidence=result['confidence'],
+                    scores=SentimentScores(
+                        positive=result['scores'].get('positive', 0),
+                        negative=result['scores'].get('negative', 0)
+                    )
+                )
+                for result in results
+            ]
+        except Exception as e:
+            logger.error(f"GraphQL batch sentiment analysis failed: {str(e)}")
+            raise
+
+# Create schema
+schema = strawberry.Schema(query=Query, mutation=Mutation)
+
+# Create GraphQL app
+graphql_app = GraphQLRouter(schema)

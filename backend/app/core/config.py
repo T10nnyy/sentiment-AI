@@ -2,19 +2,22 @@
 Configuration management using Pydantic Settings
 """
 
-from pydantic import BaseSettings, Field
+from pydantic_settings import BaseSettings
+from pydantic import Field
 from typing import List, Literal
 import os
 
 class Settings(BaseSettings):
+    model_config = {'protected_namespaces': ('settings_',)}
+    
     # Model Configuration
     model_name: str = Field(
         default="siebert/sentiment-roberta-large-english",
         env="MODEL_NAME"
     )
-    model_framework: Literal["pytorch", "tensorflow"] = Field(
+    ml_framework: Literal["pytorch", "tensorflow"] = Field(
         default="pytorch",
-        env="MODEL_FRAMEWORK"
+        env="ML_FRAMEWORK"
     )
     local_model_path: str = Field(default="./model/", env="LOCAL_MODEL_PATH")
     device: Literal["cpu", "cuda", "mps"] = Field(default="cpu", env="DEVICE")
@@ -45,10 +48,6 @@ class Settings(BaseSettings):
     
     # Monitoring
     enable_metrics: bool = Field(default=True, env="ENABLE_METRICS")
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 # Global settings instance
 settings = Settings()

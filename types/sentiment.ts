@@ -3,12 +3,13 @@
  */
 
 export interface SentimentResult {
+  text: string
   sentiment: string
   confidence: number
   scores?: {
-    positive: number
-    negative: number
-    neutral: number
+    positive?: number
+    negative?: number
+    [key: string]: number | undefined
   }
   processing_time?: number
 }
@@ -31,25 +32,32 @@ export interface SentimentRequest {
 
 export interface ModelInfo {
   name: string
-  version: string
-  type: string
-  language: string
-  accuracy: number
-  f1_score: number
-  parameters: string
-  size: string
-  description: string
-  usage_stats?: {
-    total_requests: number
-    avg_response_time: number
-    success_rate: number
-    memory_usage: number
+  framework: string
+  device: string
+  load_time: number
+  quantized: boolean
+  parameters: number
+  model_size_mb: number
+  description?: string
+  labels?: string[]
+  performance?: {
+    accuracy: number
+    f1_score: number
+    inference_time: number
+  }
+  training_info?: {
+    dataset: string
+    languages: string[]
+  }
+  config?: {
+    max_length: number
+    batch_size: number
+    hot_reload: boolean
   }
 }
 
 export interface ApiError {
   detail: string
-  status?: number
 }
 
 export interface BatchAnalysisResult {
@@ -66,14 +74,9 @@ export interface BatchAnalysisResult {
 export interface AnalysisHistoryItem {
   id: string
   text: string
-  sentiment: string
-  confidence: number
-  timestamp: string
-  scores?: {
-    positive: number
-    negative: number
-    neutral: number
-  }
+  label: string
+  score: number
+  timestamp: number
 }
 
 export interface SentimentStats {
@@ -143,10 +146,8 @@ export interface SentimentStore {
 
 export interface HealthStatus {
   status: string
-  uptime: string
-  memory_usage: string
-  gpu_available: boolean
   model_loaded: boolean
+  model_info: ModelInfo
 }
 
 export interface PredictRequest {
@@ -165,13 +166,10 @@ export interface BatchPredictResponse {
 
 export interface BatchAnalysisRequest {
   texts: string[]
-  useBatch?: boolean
 }
 
 export interface BatchAnalysisResponse {
   results: SentimentResult[]
-  totalTime: number
-  averageTime: number
 }
 
 export interface PerformanceStats {

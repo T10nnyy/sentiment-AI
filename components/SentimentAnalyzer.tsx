@@ -3,38 +3,27 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
+import { Loader2, MessageSquare, TrendingUp, TrendingDown } from "lucide-react"
 import { useSentiment } from "@/hooks/useSentiment"
-import { Loader2, Send, RotateCcw } from "lucide-react"
-import { toast } from "sonner"
 import type { SentimentResult } from "@/types/sentiment"
 
-export default function SentimentAnalyzer() {
+export function SentimentAnalyzer() {
   const [text, setText] = useState("")
   const [result, setResult] = useState<SentimentResult | null>(null)
-  const { analyzeSentiment, loading } = useSentiment()
+  const { analyzeSentiment, loading, error } = useSentiment()
 
   const handleAnalyze = async () => {
-    if (!text.trim()) {
-      toast.error("Please enter some text to analyze")
-      return
-    }
+    if (!text.trim()) return
 
     try {
-      const analysis = await analyzeSentiment(text)
-      setResult(analysis)
-      toast.success("Analysis completed successfully!")
-    } catch (error) {
-      toast.error("Failed to analyze sentiment")
-      console.error("Analysis error:", error)
+      const analysisResult = await analyzeSentiment(text)
+      setResult(analysisResult)
+    } catch (err) {
+      console.error("Analysis failed:", err)
     }
-  }
-
-  const handleReset = () => {
-    setText("")
-    setResult(null)
   }
 
   const getSentimentColor = (sentiment: string) => {
@@ -43,23 +32,19 @@ export default function SentimentAnalyzer() {
         return "bg-green-500"
       case "negative":
         return "bg-red-500"
-      case "neutral":
-        return "bg-gray-500"
       default:
-        return "bg-blue-500"
+        return "bg-gray-500"
     }
   }
 
-  const getSentimentBadgeVariant = (sentiment: string) => {
+  const getSentimentIcon = (sentiment: string) => {
     switch (sentiment.toLowerCase()) {
       case "positive":
-        return "default" as const
+        return <TrendingUp className="h-4 w-4" />
       case "negative":
-        return "destructive" as const
-      case "neutral":
-        return "secondary" as const
+        return <TrendingDown className="h-4 w-4" />
       default:
-        return "outline" as const
+        return <MessageSquare className="h-4 w-4" />
     }
   }
 
@@ -70,70 +55,80 @@ export default function SentimentAnalyzer() {
           placeholder="Enter text to analyze sentiment..."
           value={text}
           onChange={(e) => setText(e.target.value)}
-          rows={4}
-          className="resize-none"
+          className="min-h-[120px]"
         />
 
-        <div className="flex gap-2">
-          <Button onClick={handleAnalyze} disabled={loading || !text.trim()} className="flex-1">
-            {loading ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Analyzing...
-              </>
-            ) : (
-              <>
-                <Send className="w-4 h-4 mr-2" />
-                Analyze Sentiment
-              </>
-            )}
-          </Button>
-
-          <Button variant="outline" onClick={handleReset} disabled={loading}>
-            <RotateCcw className="w-4 h-4 mr-2" />
-            Reset
-          </Button>
-        </div>
+        <Button onClick={handleAnalyze} disabled={!text.trim() || loading} className="w-full">
+          {loading ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Analyzing...
+            </>
+          ) : (
+            <>
+              <MessageSquare className="mr-2 h-4 w-4" />
+              Analyze Sentiment
+            </>
+          )}
+        </Button>
       </div>
+
+      {error && (
+        <Card className="border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950">
+          <CardContent className="pt-6">
+            <p className="text-red-600 dark:text-red-400">{error}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {result && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              {getSentimentIcon(result.sentiment)}
               Analysis Result
-              <Badge variant={getSentimentBadgeVariant(result.sentiment)}>{result.sentiment}</Badge>
             </CardTitle>
+            <CardDescription>Sentiment analysis powered by siebert/sentiment-roberta-large-english</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div>
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-sm font-medium">Confidence</span>
-                <span className="text-sm text-muted-foreground">{(result.confidence * 100).toFixed(1)}%</span>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Overall Sentiment:</span>
+              <Badge className={`${getSentimentColor(result.sentiment)} text-white`}>
+                {result.sentiment.charAt(0).toUpperCase() + result.sentiment.slice(1)}
+              </Badge>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span>Confidence:</span>
+                <span className="font-medium">{(result.confidence * 100).toFixed(1)}%</span>
               </div>
               <Progress value={result.confidence * 100} className="h-2" />
             </div>
 
             {result.scores && (
-              <div className="space-y-2">
-                <h4 className="text-sm font-medium">Detailed Scores</h4>
-                {Object.entries(result.scores).map(([sentiment, score]) => (
-                  <div key={sentiment} className="flex items-center justify-between">
-                    <span className="text-sm capitalize">{sentiment}</span>
-                    <div className="flex items-center gap-2">
-                      <div className="w-20 bg-gray-200 rounded-full h-2">
-                        <div
-                          className={`h-2 rounded-full ${getSentimentColor(sentiment)}`}
-                          style={{ width: `${score * 100}%` }}
-                        />
+              <div className="space-y-3">
+                <h4 className="text-sm font-medium">Detailed Scores:</h4>
+                <div className="space-y-2">
+                  {Object.entries(result.scores).map(([label, score]) => (
+                    <div key={label} className="flex items-center justify-between text-sm">
+                      <span className="capitalize">{label}:</span>
+                      <div className="flex items-center gap-2">
+                        <Progress value={score * 100} className="h-1 w-20" />
+                        <span className="font-medium w-12 text-right">{(score * 100).toFixed(1)}%</span>
                       </div>
-                      <span className="text-sm text-muted-foreground w-12 text-right">{(score * 100).toFixed(1)}%</span>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
 
-            <div className="text-xs text-muted-foreground">Model: siebert/sentiment-roberta-large-english</div>
+            <div className="pt-2 border-t">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Analyzed text: "{result.text.substring(0, 100)}
+                {result.text.length > 100 ? "..." : ""}"
+              </p>
+            </div>
           </CardContent>
         </Card>
       )}

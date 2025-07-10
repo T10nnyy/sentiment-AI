@@ -1,31 +1,73 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import {
+  Search,
+  Filter,
+  Trash2,
+  Download,
+  Calendar,
+  TrendingUp,
+  TrendingDown,
+  MessageSquare,
+  History,
+} from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useAnalysisHistory } from "@/hooks/useSentiment"
-import { Search, Trash2, Download, Filter } from "lucide-react"
-import { toast } from "sonner"
+import type { SentimentResult } from "@/types/sentiment"
 
-export default function AnalysisHistory() {
+interface HistoryItem extends SentimentResult {
+  id: string
+  timestamp: Date
+}
+
+export function AnalysisHistory() {
+  const [history, setHistory] = useState<HistoryItem[]>([])
+  const [filteredHistory, setFilteredHistory] = useState<HistoryItem[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [sentimentFilter, setSentimentFilter] = useState<string>("all")
-  const [sortBy, setSortBy] = useState<string>("date")
-  const { history, loading, clearHistory, deleteItem, exportHistory } = useAnalysisHistory()
+  const [sortBy, setSortBy] = useState<string>("newest")
 
-  const filteredHistory = history
-    .filter((item) => {
-      const matchesSearch = item.text.toLowerCase().includes(searchTerm.toLowerCase())
-      const matchesSentiment = sentimentFilter === "all" || item.sentiment.toLowerCase() === sentimentFilter
-      return matchesSearch && matchesSentiment
-    })
-    .sort((a, b) => {
+  // Load history from localStorage on component mount
+  useEffect(() => {
+    const savedHistory = localStorage.getItem("sentiment_analysis_history")
+    if (savedHistory) {
+      try {
+        const parsed = JSON.parse(savedHistory).map((item: any) => ({
+          ...item,
+          timestamp: new Date(item.timestamp),
+        }))
+        setHistory(parsed)
+      } catch (error) {
+        console.error("Failed to load history:", error)
+      }
+    }
+  }, [])
+
+  // Filter and sort history
+  useEffect(() => {
+    let filtered = [...history]
+
+    // Apply search filter
+    if (searchTerm) {
+      filtered = filtered.filter((item) => item.text.toLowerCase().includes(searchTerm.toLowerCase()))
+    }
+
+    // Apply sentiment filter
+    if (sentimentFilter !== "all") {
+      filtered = filtered.filter((item) => item.sentiment.toLowerCase() === sentimentFilter.toLowerCase())
+    }
+
+    // Apply sorting
+    filtered.sort((a, b) => {
       switch (sortBy) {
-        case "date":
-          return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        case "newest":
+          return b.timestamp.getTime() - a.timestamp.getTime()
+        case "oldest":
+          return a.timestamp.getTime() - b.timestamp.getTime()
         case "confidence":
           return b.confidence - a.confidence
         case "text":
@@ -35,143 +77,236 @@ export default function AnalysisHistory() {
       }
     })
 
-  const handleClearHistory = async () => {
-    try {
-      await clearHistory()
-      toast.success("History cleared successfully")
-    } catch (error) {
-      toast.error("Failed to clear history")
+    setFilteredHistory(filtered)
+  }, [history, searchTerm, sentimentFilter, sortBy])
+
+  // Save analysis to history
+  const saveToHistory = (result: SentimentResult) => {
+    const historyItem: HistoryItem = {
+      ...result,
+      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      timestamp: new Date(),
     }
+
+    const updatedHistory = [historyItem, ...history].slice(0, 100) // Keep only last 100 items
+    setHistory(updatedHistory)
+    localStorage.setItem("sentiment_analysis_history", JSON.stringify(updatedHistory))
   }
 
-  const handleDeleteItem = async (id: string) => {
-    try {
-      await deleteItem(id)
-      toast.success("Item deleted successfully")
-    } catch (error) {
-      toast.error("Failed to delete item")
-    }
+  const clearHistory = () => {
+    setHistory([])
+    localStorage.removeItem("sentiment_analysis_history")
   }
 
-  const handleExport = async () => {
-    try {
-      await exportHistory()
-      toast.success("History exported successfully")
-    } catch (error) {
-      toast.error("Failed to export history")
-    }
+  const deleteItem = (id: string) => {
+    const updatedHistory = history.filter((item) => item.id !== id)
+    setHistory(updatedHistory)
+    localStorage.setItem("sentiment_analysis_history", JSON.stringify(updatedHistory))
   }
 
-  const getSentimentBadgeVariant = (sentiment: string) => {
+  const exportHistory = () => {
+    if (filteredHistory.length === 0) return
+
+    const csvContent = [
+      ["Timestamp", "Text", "Sentiment", "Confidence", "Positive Score", "Negative Score"],
+      ...filteredHistory.map((item) => [
+        item.timestamp.toISOString(),
+        `"${item.text.replace(/"/g, '""')}"`,
+        item.sentiment,
+        (item.confidence * 100).toFixed(2),
+        ((item.scores?.positive || 0) * 100).toFixed(2),
+        ((item.scores?.negative || 0) * 100).toFixed(2),
+      ]),
+    ]
+      .map((row) => row.join(","))
+      .join("\n")
+
+    const blob = new Blob([csvContent], { type: "text/csv" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `sentiment_history_${new Date().toISOString().split("T")[0]}.csv`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const getSentimentColor = (sentiment: string) => {
     switch (sentiment.toLowerCase()) {
       case "positive":
-        return "default" as const
+        return "bg-green-500"
       case "negative":
-        return "destructive" as const
-      case "neutral":
-        return "secondary" as const
+        return "bg-red-500"
       default:
-        return "outline" as const
+        return "bg-gray-500"
     }
   }
 
-  const formatDate = (timestamp: string) => {
-    return new Date(timestamp).toLocaleString()
+  const getSentimentIcon = (sentiment: string) => {
+    switch (sentiment.toLowerCase()) {
+      case "positive":
+        return <TrendingUp className="h-3 w-3" />
+      case "negative":
+        return <TrendingDown className="h-3 w-3" />
+      default:
+        return <MessageSquare className="h-3 w-3" />
+    }
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-8">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading history...</p>
-        </div>
-      </div>
-    )
+  const getStats = () => {
+    const positive = history.filter((item) => item.sentiment.toLowerCase() === "positive").length
+    const negative = history.filter((item) => item.sentiment.toLowerCase() === "negative").length
+    const avgConfidence =
+      history.length > 0 ? history.reduce((sum, item) => sum + item.confidence, 0) / history.length : 0
+
+    return { positive, negative, total: history.length, avgConfidence }
   }
+
+  const stats = getStats()
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row gap-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-          <Input
-            placeholder="Search analysis history..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10"
-          />
-        </div>
+      {/* Header with Stats */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <History className="h-5 w-5" />
+            Analysis History
+          </CardTitle>
+          <CardDescription>View and manage your sentiment analysis history</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="text-center p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
+              <div className="text-2xl font-bold text-blue-600">{stats.total}</div>
+              <div className="text-sm text-blue-600">Total Analyses</div>
+            </div>
+            <div className="text-center p-3 bg-green-50 dark:bg-green-950 rounded-lg">
+              <div className="text-2xl font-bold text-green-600">{stats.positive}</div>
+              <div className="text-sm text-green-600">Positive</div>
+            </div>
+            <div className="text-center p-3 bg-red-50 dark:bg-red-950 rounded-lg">
+              <div className="text-2xl font-bold text-red-600">{stats.negative}</div>
+              <div className="text-sm text-red-600">Negative</div>
+            </div>
+            <div className="text-center p-3 bg-purple-50 dark:bg-purple-950 rounded-lg">
+              <div className="text-2xl font-bold text-purple-600">{(stats.avgConfidence * 100).toFixed(1)}%</div>
+              <div className="text-sm text-purple-600">Avg Confidence</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
-        <Select value={sentimentFilter} onValueChange={setSentimentFilter}>
-          <SelectTrigger className="w-full sm:w-40">
-            <SelectValue placeholder="Filter by sentiment" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Sentiments</SelectItem>
-            <SelectItem value="positive">Positive</SelectItem>
-            <SelectItem value="negative">Negative</SelectItem>
-            <SelectItem value="neutral">Neutral</SelectItem>
-          </SelectContent>
-        </Select>
+      {/* Filters and Controls */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex flex-col md:flex-row gap-4">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <Input
+                  placeholder="Search analyses..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+            </div>
 
-        <Select value={sortBy} onValueChange={setSortBy}>
-          <SelectTrigger className="w-full sm:w-40">
-            <SelectValue placeholder="Sort by" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="date">Date</SelectItem>
-            <SelectItem value="confidence">Confidence</SelectItem>
-            <SelectItem value="text">Text</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+            <Select value={sentimentFilter} onValueChange={setSentimentFilter}>
+              <SelectTrigger className="w-full md:w-40">
+                <Filter className="h-4 w-4 mr-2" />
+                <SelectValue placeholder="Filter by sentiment" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Sentiments</SelectItem>
+                <SelectItem value="positive">Positive</SelectItem>
+                <SelectItem value="negative">Negative</SelectItem>
+              </SelectContent>
+            </Select>
 
-      <div className="flex justify-between items-center">
-        <p className="text-sm text-muted-foreground">
-          {filteredHistory.length} of {history.length} items
-        </p>
+            <Select value={sortBy} onValueChange={setSortBy}>
+              <SelectTrigger className="w-full md:w-40">
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="newest">Newest First</SelectItem>
+                <SelectItem value="oldest">Oldest First</SelectItem>
+                <SelectItem value="confidence">Confidence</SelectItem>
+                <SelectItem value="text">Text A-Z</SelectItem>
+              </SelectContent>
+            </Select>
 
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleExport}>
-            <Download className="w-4 h-4 mr-2" />
-            Export
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleClearHistory}>
-            <Trash2 className="w-4 h-4 mr-2" />
-            Clear All
-          </Button>
-        </div>
-      </div>
+            <div className="flex gap-2">
+              <Button onClick={exportHistory} variant="outline" disabled={filteredHistory.length === 0}>
+                <Download className="h-4 w-4 mr-2" />
+                Export
+              </Button>
+              <Button onClick={clearHistory} variant="outline" disabled={history.length === 0}>
+                <Trash2 className="h-4 w-4 mr-2" />
+                Clear All
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
+      {/* History List */}
       {filteredHistory.length === 0 ? (
         <Card>
-          <CardContent className="text-center py-8">
-            <Filter className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-            <p className="text-muted-foreground">
-              {history.length === 0
-                ? "No analysis history yet. Start analyzing some text!"
-                : "No items match your current filters."}
-            </p>
+          <CardContent className="pt-6">
+            <div className="text-center py-8">
+              <History className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No analysis history</h3>
+              <p className="text-gray-500 dark:text-gray-400">
+                {history.length === 0
+                  ? "Start analyzing text to build your history"
+                  : "No results match your current filters"}
+              </p>
+            </div>
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {filteredHistory.map((item) => (
             <Card key={item.id}>
-              <CardContent className="p-4">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm mb-2 line-clamp-2">{item.text}</p>
-                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                      <span>{formatDate(item.timestamp)}</span>
+              <CardContent className="pt-6">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-center gap-2 text-sm text-gray-500">
+                      <Calendar className="h-3 w-3" />
+                      <span>{item.timestamp.toLocaleString()}</span>
+                    </div>
+
+                    <p className="text-sm">
+                      {item.text.length > 200 ? `${item.text.substring(0, 200)}...` : item.text}
+                    </p>
+
+                    <div className="flex items-center gap-4 text-xs text-gray-500">
                       <span>Confidence: {(item.confidence * 100).toFixed(1)}%</span>
+                      {item.scores && (
+                        <>
+                          <span>Positive: {((item.scores.positive || 0) * 100).toFixed(1)}%</span>
+                          <span>Negative: {((item.scores.negative || 0) * 100).toFixed(1)}%</span>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 ml-4">
-                    <Badge variant={getSentimentBadgeVariant(item.sentiment)}>{item.sentiment}</Badge>
-                    <Button variant="ghost" size="sm" onClick={() => handleDeleteItem(item.id)}>
-                      <Trash2 className="w-4 h-4" />
+
+                  <div className="flex items-center gap-2">
+                    <Badge className={`${getSentimentColor(item.sentiment)} text-white flex items-center gap-1`}>
+                      {getSentimentIcon(item.sentiment)}
+                      {item.sentiment.charAt(0).toUpperCase() + item.sentiment.slice(1)}
+                    </Badge>
+
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => deleteItem(item.id)}
+                      className="text-red-500 hover:text-red-700"
+                    >
+                      <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
                 </div>
