@@ -8,16 +8,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Texts array is required" }, { status: 400 })
     }
 
-    if (texts.length === 0) {
-      return NextResponse.json({ error: "At least one text is required" }, { status: 400 })
-    }
-
-    if (texts.length > 100) {
-      return NextResponse.json({ error: "Maximum 100 texts allowed" }, { status: 400 })
-    }
-
-    // Call the Python backend
-    const backendResponse = await fetch("http://localhost:8000/api/predict/batch", {
+    // Forward request to Python backend
+    const response = await fetch("http://localhost:8000/api/predict/batch", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -25,34 +17,14 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({ texts }),
     })
 
-    if (!backendResponse.ok) {
-      const errorText = await backendResponse.text()
-      console.error("Backend error:", errorText)
-      throw new Error(`Backend error: ${backendResponse.status}`)
+    if (!response.ok) {
+      throw new Error(`Backend responded with status: ${response.status}`)
     }
 
-    const result = await backendResponse.json()
-
-    // Transform the results to match our frontend interface
-    const transformedResults = {
-      results:
-        result.results?.map((r: any, index: number) => ({
-          text: texts[index],
-          sentiment: {
-            label: r.label || r.sentiment?.label || "UNKNOWN",
-            score: r.score || r.sentiment?.score || 0,
-          },
-          confidence: r.confidence || r.score || 0,
-          processing_time: r.processing_time || 0,
-          scores: r.scores || {},
-        })) || [],
-      total_processing_time: result.total_processing_time || 0,
-      average_processing_time: result.average_processing_time || 0,
-    }
-
-    return NextResponse.json(transformedResults)
-  } catch (error: any) {
+    const result = await response.json()
+    return NextResponse.json(result)
+  } catch (error) {
     console.error("API Error:", error)
-    return NextResponse.json({ error: error.message || "Internal server error" }, { status: 500 })
+    return NextResponse.json({ error: "Failed to analyze batch sentiment" }, { status: 500 })
   }
 }

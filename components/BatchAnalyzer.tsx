@@ -1,195 +1,270 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useRef } from "react"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
-import { Upload, Download, FileText, Loader2 } from "lucide-react"
-import { useSentiment } from "@/hooks/useSentiment"
+import { Loader2, Upload, FileText, Download, Trash2, Plus } from "lucide-react"
+import { useBatchPrediction } from "@/hooks/useSentiment"
+import {
+  formatSentimentLabel,
+  getSentimentColor,
+  formatConfidence,
+  formatProcessingTime,
+  exportToCSV,
+  validateFileType,
+  formatFileSize,
+} from "@/lib/utils"
 
-export function BatchAnalyzer() {
+export default function BatchAnalyzer() {
+  const [texts, setTexts] = useState<string[]>([""])
   const [file, setFile] = useState<File | null>(null)
-  const [results, setResults] = useState<any>(null)
-  const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { loading, error, analyzeFile } = useSentiment()
+  const { results, loading, error, predictBatch, analyzeFile, reset } = useBatchPrediction()
 
-  const handleFileSelect = (selectedFile: File) => {
-    if (selectedFile && (selectedFile.name.endsWith(".csv") || selectedFile.name.endsWith(".txt"))) {
+  const handleAddText = () => {
+    setTexts([...texts, ""])
+  }
+
+  const handleRemoveText = (index: number) => {
+    if (texts.length > 1) {
+      setTexts(texts.filter((_, i) => i !== index))
+    }
+  }
+
+  const handleTextChange = (index: number, value: string) => {
+    const newTexts = [...texts]
+    newTexts[index] = value
+    setTexts(newTexts)
+  }
+
+  const handleAnalyzeTexts = async () => {
+    const validTexts = texts.filter((text) => text.trim())
+    if (validTexts.length === 0) return
+
+    await predictBatch(validTexts)
+  }
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0]
+    if (selectedFile && validateFileType(selectedFile)) {
       setFile(selectedFile)
-      setResults(null)
+      reset() // Clear previous results
     } else {
-      alert("Please select a CSV or TXT file")
+      alert("Please select a valid CSV or TXT file")
     }
   }
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(false)
-    const droppedFile = e.dataTransfer.files[0]
-    if (droppedFile) {
-      handleFileSelect(droppedFile)
-    }
-  }
-
-  const handleAnalyze = async () => {
+  const handleAnalyzeFile = async () => {
     if (!file) return
-
-    const batchResult = await analyzeFile(file)
-    if (batchResult) {
-      setResults(batchResult)
-    }
+    await analyzeFile(file)
   }
 
-  const downloadResults = () => {
-    if (!results) return
+  const handleExportResults = () => {
+    if (!results?.results) return
 
-    const csvContent = [
-      ["Text Index", "Sentiment", "Confidence", "Processing Time (ms)"],
-      ...results.results.map((result: any, index: number) => [
-        index + 1,
-        result.label,
-        (result.confidence * 100).toFixed(1) + "%",
-        (result.processing_time * 1000).toFixed(1),
-      ]),
-    ]
-      .map((row) => row.join(","))
-      .join("\n")
+    const exportData = results.results.map((result, index) => ({
+      index: index + 1,
+      text: result.text,
+      sentiment: formatSentimentLabel(result.sentiment.label),
+      confidence: formatConfidence(result.confidence),
+      processing_time: formatProcessingTime(result.processing_time),
+      ...result.scores,
+    }))
 
-    const blob = new Blob([csvContent], { type: "text/csv" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `sentiment_analysis_results_${Date.now()}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    exportToCSV(exportData, `sentiment-analysis-${new Date().toISOString().split("T")[0]}.csv`)
   }
 
-  const getSentimentColor = (label: string) => {
-    switch (label.toLowerCase()) {
-      case "positive":
-        return "bg-green-100 text-green-800 border-green-200"
-      case "negative":
-        return "bg-red-100 text-red-800 border-red-200"
-      case "neutral":
-        return "bg-gray-100 text-gray-800 border-gray-200"
-      default:
-        return "bg-blue-100 text-blue-800 border-blue-200"
+  const handleReset = () => {
+    setTexts([""])
+    setFile(null)
+    reset()
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
     }
   }
 
   return (
-    <Card className="w-full max-w-4xl mx-auto">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Upload className="h-5 w-5" />
-          Batch Analysis
-        </CardTitle>
-        <CardDescription>Upload CSV or TXT files for batch sentiment analysis (max 1000 texts)</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div
-          className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
-            dragOver ? "border-blue-400 bg-blue-50" : "border-gray-300"
-          }`}
-          onDrop={handleDrop}
-          onDragOver={(e) => {
-            e.preventDefault()
-            setDragOver(true)
-          }}
-          onDragLeave={() => setDragOver(false)}
-        >
-          <FileText className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-          <p className="text-sm text-gray-600 mb-2">Drag and drop your file here, or click to select</p>
-          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
-            Select File
-          </Button>
-          <Input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv,.txt"
-            onChange={(e) => {
-              const selectedFile = e.target.files?.[0]
-              if (selectedFile) handleFileSelect(selectedFile)
-            }}
-            className="hidden"
-          />
-        </div>
-
-        {file && (
-          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-            <div className="flex items-center gap-2">
-              <FileText className="h-4 w-4" />
-              <span className="text-sm font-medium">{file.name}</span>
-              <span className="text-xs text-gray-500">({(file.size / 1024).toFixed(1)} KB)</span>
-            </div>
-            <Button onClick={handleAnalyze} disabled={loading}>
-              {loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Analyzing...
-                </>
-              ) : (
-                "Analyze File"
-              )}
-            </Button>
-          </div>
-        )}
-
-        {error && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-md">
-            <p className="text-sm text-red-600">{error}</p>
-          </div>
-        )}
-
-        {results && (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            Batch Analysis
+          </CardTitle>
+          <CardDescription>Analyze multiple texts at once or upload a file for bulk processing</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Manual Text Input */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Analysis Results</h3>
-              <Button onClick={downloadResults} variant="outline" size="sm">
-                <Download className="mr-2 h-4 w-4" />
-                Download CSV
+              <h3 className="text-lg font-medium">Manual Text Input</h3>
+              <Button variant="outline" size="sm" onClick={handleAddText} disabled={loading || texts.length >= 10}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Text
               </Button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card>
-                <CardContent className="p-4">
-                  <div className="text-2xl font-bold">{results.results.length}</div>
-                  <div className="text-sm text-gray-600">Total Texts</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4">
-                  <div className="text-2xl font-bold">{results.total_processing_time.toFixed(2)}s</div>
-                  <div className="text-sm text-gray-600">Total Time</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4">
-                  <div className="text-2xl font-bold">{(results.average_processing_time * 1000).toFixed(1)}ms</div>
-                  <div className="text-sm text-gray-600">Avg per Text</div>
-                </CardContent>
-              </Card>
-            </div>
-
-            <div className="max-h-96 overflow-y-auto space-y-2">
-              {results.results.map((result: any, index: number) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-mono text-gray-500">#{index + 1}</span>
-                    <Badge className={getSentimentColor(result.label)}>{result.label}</Badge>
-                  </div>
-                  <div className="text-sm font-mono">{(result.confidence * 100).toFixed(1)}%</div>
+            <div className="space-y-3">
+              {texts.map((text, index) => (
+                <div key={index} className="flex gap-2">
+                  <Textarea
+                    placeholder={`Text ${index + 1}...`}
+                    value={text}
+                    onChange={(e) => handleTextChange(index, e.target.value)}
+                    className="min-h-[80px] resize-none"
+                    disabled={loading}
+                  />
+                  {texts.length > 1 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleRemoveText(index)}
+                      disabled={loading}
+                      className="self-start mt-2"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>
+
+            <Button
+              onClick={handleAnalyzeTexts}
+              disabled={loading || !texts.some((text) => text.trim())}
+              className="w-full"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Analyzing {texts.filter((t) => t.trim()).length} texts...
+                </>
+              ) : (
+                <>
+                  <FileText className="mr-2 h-4 w-4" />
+                  Analyze {texts.filter((t) => t.trim()).length} Texts
+                </>
+              )}
+            </Button>
           </div>
-        )}
-      </CardContent>
-    </Card>
+
+          {/* File Upload */}
+          <div className="border-t pt-6">
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium">File Upload</h3>
+
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+                <Upload className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                <p className="text-sm text-gray-600 mb-2">Upload a CSV or TXT file for batch analysis</p>
+                <p className="text-xs text-gray-500 mb-4">
+                  CSV files should have a 'text' column. TXT files should have one text per line. Maximum 50 texts for
+                  Vercel deployment.
+                </p>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,.txt"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+
+                <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={loading}>
+                  <Upload className="mr-2 h-4 w-4" />
+                  Choose File
+                </Button>
+              </div>
+
+              {file && (
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-md">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    <span className="text-sm font-medium">{file.name}</span>
+                    <span className="text-xs text-gray-500">({formatFileSize(file.size)})</span>
+                  </div>
+                  <Button onClick={handleAnalyzeFile} disabled={loading} size="sm">
+                    {loading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      "Analyze File"
+                    )}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Reset Button */}
+          <Button variant="outline" onClick={handleReset} disabled={loading} className="w-full bg-transparent">
+            <Trash2 className="mr-2 h-4 w-4" />
+            Reset All
+          </Button>
+
+          {/* Error Display */}
+          {error && <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">{error}</div>}
+
+          {/* Results */}
+          {results && (
+            <Card className="border-l-4 border-l-blue-500">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg">Batch Analysis Results ({results.results.length} texts)</CardTitle>
+                  <Button variant="outline" size="sm" onClick={handleExportResults}>
+                    <Download className="mr-2 h-4 w-4" />
+                    Export CSV
+                  </Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Total Time: </span>
+                    <span className="font-medium">{formatProcessingTime(results.total_processing_time)}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Average Time: </span>
+                    <span className="font-medium">{formatProcessingTime(results.average_processing_time)}</span>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4 max-h-96 overflow-y-auto">
+                  {results.results.map((result, index) => (
+                    <div key={index} className="border rounded-lg p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-gray-600 truncate">{result.text}</p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <Badge className={getSentimentColor(result.sentiment.label)}>
+                            {formatSentimentLabel(result.sentiment.label)}
+                          </Badge>
+                          <span className="text-sm font-medium">{formatConfidence(result.confidence)}</span>
+                        </div>
+                      </div>
+
+                      {result.scores && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                          {Object.entries(result.scores).map(([label, score]) => (
+                            <div key={label} className="flex justify-between items-center text-xs">
+                              <span>{formatSentimentLabel(label)}</span>
+                              <span className="font-medium">{formatConfidence(score)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   )
 }
