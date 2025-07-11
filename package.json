@@ -1,13 +1,12 @@
 {
   "name": "sentiment-analysis-frontend",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "build": "next build",
     "dev": "next dev",
     "lint": "next lint",
-    "start": "next start",
-    "type-check": "tsc --noEmit"
+    "start": "next start"
   },
   "dependencies": {
     "@apollo/client": "latest",
@@ -42,6 +41,10 @@
     "@radix-ui/react-tooltip": "latest",
     "@tailwindcss/forms": "latest",
     "@tailwindcss/typography": "latest",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "autoprefixer": "^10.0.1",
     "axios": "latest",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -55,6 +58,7 @@
     "lucide-react": "^0.454.0",
     "next": "14.2.16",
     "next-themes": "latest",
+    "postcss": "^8",
     "react": "^18",
     "react-day-picker": "latest",
     "react-dom": "^18",
@@ -66,7 +70,9 @@
     "sonner": "latest",
     "subscriptions-transport-ws": "latest",
     "tailwind-merge": "^2.5.5",
+    "tailwindcss": "^3.3.0",
     "tailwindcss-animate": "^1.0.7",
+    "typescript": "^5",
     "use-sync-external-store": "latest",
     "vaul": "latest",
     "zustand": "latest"
@@ -75,11 +81,9 @@
     "@types/node": "^22",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "autoprefixer": "^10.4.16",
-    "eslint": "^8.55.0",
-    "eslint-config-next": "14.0.4",
+    "eslint": "^8",
+    "eslint-config-next": "14.0.3",
     "postcss": "^8.5",
-    "tailwindcss": "^3.3.6",
     "typescript": "^5"
   }
 }

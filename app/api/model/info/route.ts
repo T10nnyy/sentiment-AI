@@ -1,23 +1,25 @@
-import { NextResponse } from "next/server"
+import { type NextRequest, NextResponse } from "next/server"
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    // Forward request to Python backend
-    const response = await fetch("http://localhost:8000/api/model/info", {
+    // Call the Python backend
+    const backendResponse = await fetch("http://localhost:8000/api/model/info", {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
       },
     })
 
-    if (!response.ok) {
-      throw new Error(`Backend responded with status: ${response.status}`)
+    if (!backendResponse.ok) {
+      const errorText = await backendResponse.text()
+      console.error("Backend error:", errorText)
+      throw new Error(`Backend error: ${backendResponse.status}`)
     }
 
-    const result = await response.json()
+    const result = await backendResponse.json()
     return NextResponse.json(result)
-  } catch (error) {
+  } catch (error: any) {
     console.error("API Error:", error)
-    return NextResponse.json({ error: "Failed to get model info" }, { status: 500 })
+    return NextResponse.json({ error: error.message || "Internal server error" }, { status: 500 })
   }
 }
