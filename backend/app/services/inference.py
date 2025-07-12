@@ -9,12 +9,12 @@ from dataclasses import dataclass
 from collections import deque
 import time
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 import psutil
 from datetime import datetime
 
 from ..core.config import settings
-from ..core.models import SentimentResult, SentimentScore, SentimentLabel, ModelInfo, HealthStatus, model_manager, PredictResponse, BatchPredictResponse, SentimentLabel, ModelInfoResponse
+from ..core.models import SentimentResult, SentimentScore, SentimentLabel, ModelInfo, HealthStatus, PredictResponse, BatchPredictResponse, ModelInfoResponse
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,14 @@ class InferenceRequest:
     timestamp: float
 
 class SentimentInferenceService:
+    """Service for handling sentiment analysis inference"""
+    
     def __init__(self):
-        self.model_name = "siebert/sentiment-roberta-large-english"
-        self.tokenizer: Optional[AutoTokenizer] = None
-        self.model: Optional[AutoModelForSequenceClassification] = None
         self.pipeline: Optional[pipeline] = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = None
+        self.tokenizer = None
+        self.device = settings.DEVICE
+        self.model_name = settings.MODEL_NAME
         self._model_loaded = False
         self.start_time = time.time()
         self.load_model()
@@ -43,107 +45,122 @@ class SentimentInferenceService:
         self.total_predictions = 0
         self.total_processing_time = 0
         
-    def load_model(self) -> None:
+        # Label mapping for Cardiff model
+        self.label_mapping = {
+            "LABEL_0": "negative",
+            "LABEL_1": "neutral", 
+            "LABEL_2": "positive"
+        }
+    
+    def load_model(self) -> bool:
         """Load the sentiment analysis model"""
         try:
-            logger.info(f"Loading model {self.model_name} on {self.device}")
+            logger.info(f"Loading model: {self.model_name}")
             
-            # Load tokenizer and model
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
-            
-            # Move model to device
-            self.model.to(self.device)
-            
-            # Create pipeline
+            # Load the pipeline
             self.pipeline = pipeline(
                 "sentiment-analysis",
-                model=self.model,
-                tokenizer=self.tokenizer,
-                device=0 if self.device == "cuda" else -1,
+                model=self.model_name,
+                device=0 if self.device == "cuda" and torch.cuda.is_available() else -1,
                 return_all_scores=True
             )
             
-            self._model_loaded = True
+            # Load model and tokenizer separately for more control
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+            
             logger.info("Model loaded successfully")
+            self._model_loaded = True
+            return True
             
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             self._model_loaded = False
-            raise
-
+            return False
+    
     def is_model_loaded(self) -> bool:
         """Check if model is loaded"""
         return self._model_loaded and self.pipeline is not None
-
-    def predict(self, text: str) -> PredictResponse:
-        """Predict sentiment for a single text"""
+    
+    def normalize_label(self, label: str) -> str:
+        """Normalize label names"""
+        return self.label_mapping.get(label, label.lower())
+    
+    def analyze_sentiment(self, text: str) -> PredictResponse:
+        """Analyze sentiment of a single text"""
         if not self.is_model_loaded():
             raise RuntimeError("Model not loaded")
-
+        
         start_time = time.time()
         
         try:
             # Get predictions
             results = self.pipeline(text)
-            processing_time = time.time() - start_time
             
-            # Extract results (pipeline returns list of dicts with all scores)
-            scores = {result['label']: result['score'] for result in results[0]}
-            
-            # Find the label with highest score
+            # Find the highest scoring result
             best_result = max(results[0], key=lambda x: x['score'])
+            
+            normalized_label = self.normalize_label(best_result['label'])
+            processing_time = time.time() - start_time
             
             return PredictResponse(
                 text=text,
                 sentiment=SentimentLabel(
-                    label=best_result['label'],
+                    label=normalized_label,
                     score=best_result['score']
                 ),
                 confidence=best_result['score'],
                 processing_time=processing_time,
-                scores=scores
+                scores={result['label']: result['score'] for result in results[0]}
             )
             
         except Exception as e:
-            logger.error(f"Prediction failed for text: {text[:50]}... Error: {e}")
-            raise
-
-    def predict_batch(self, texts: List[str]) -> BatchPredictResponse:
-        """Predict sentiment for multiple texts"""
+            logger.error(f"Sentiment analysis failed: {e}")
+            raise RuntimeError(f"Analysis failed: {str(e)}")
+    
+    def analyze_batch(self, texts: List[str]) -> BatchPredictResponse:
+        """Analyze sentiment of multiple texts"""
         if not self.is_model_loaded():
             raise RuntimeError("Model not loaded")
-
+        
         start_time = time.time()
         results = []
         
-        try:
-            for text in texts:
-                result = self.predict(text)
+        for text in texts:
+            try:
+                result = self.analyze_sentiment(text)
                 results.append(result)
-            
-            total_time = time.time() - start_time
-            avg_time = total_time / len(texts) if texts else 0
-            
-            return BatchPredictResponse(
-                results=results,
-                total_processing_time=total_time,
-                average_processing_time=avg_time
-            )
-            
-        except Exception as e:
-            logger.error(f"Batch prediction failed: {e}")
-            raise
-
+            except Exception as e:
+                logger.error(f"Failed to analyze text: {text[:50]}... Error: {e}")
+                # Add a default result for failed analysis
+                results.append(PredictResponse(
+                    text=text,
+                    sentiment=SentimentLabel(
+                        label="UNKNOWN",
+                        score=0.0
+                    ),
+                    confidence=0.0,
+                    processing_time=0.0,
+                    scores={}
+                ))
+        
+        total_time = time.time() - start_time
+        avg_time = total_time / len(texts) if texts else 0
+        
+        return BatchPredictResponse(
+            results=results,
+            total_processing_time=total_time,
+            average_processing_time=avg_time
+        )
+    
     def get_model_info(self) -> ModelInfoResponse:
-        """Get model information"""
-        if not self.is_model_loaded():
-            raise RuntimeError("Model not loaded")
+        """Get information about the loaded model"""
+        device_info = "cuda" if torch.cuda.is_available() and self.device == "cuda" else "cpu"
         
         return ModelInfoResponse(
             name=self.model_name,
             framework="PyTorch/Transformers",
-            device=self.device,
+            device=device_info,
             quantized=False,
             version="1.0.0"
         )
@@ -153,8 +170,8 @@ class SentimentInferenceService:
         memory = psutil.virtual_memory()
         
         return HealthStatus(
-            status="healthy" if self.model is not None and self.is_model_loaded() else "unhealthy",
-            service="sentiment-analysis",
+            status="healthy" if self.is_model_loaded() else "unhealthy",
+            service="sentiment-analysis-service",
             model_loaded=self.is_model_loaded(),
             memory_usage={
                 "total": memory.total,
@@ -163,7 +180,7 @@ class SentimentInferenceService:
                 "used": memory.used
             },
             uptime=time.time() - self.start_time,
-            timestamp=datetime.now()
+            timestamp=datetime.utcnow().isoformat()
         )
     
     async def start(self):
@@ -275,7 +292,7 @@ class SentimentInferenceService:
                 request_text_counts.append(len(request.texts))
             
             # Run inference on all texts
-            results = self.predict_batch(all_texts)
+            results = self.analyze_batch(all_texts)
             
             # Distribute results back to requests
             result_index = 0

@@ -18,48 +18,52 @@ from transformers import (
 from .config import settings
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
 class SentimentLabel(str, Enum):
-    POSITIVE = "POSITIVE"
-    NEGATIVE = "NEGATIVE"
-    NEUTRAL = "NEUTRAL"
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+    NEUTRAL = "neutral"
 
-class PredictRequest(BaseModel):
+class SentimentRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=10000, description="Text to analyze")
 
-class BatchPredictRequest(BaseModel):
+class BatchSentimentRequest(BaseModel):
     texts: List[str] = Field(..., min_items=1, max_items=100, description="List of texts to analyze")
 
-class SentimentLabelModel(BaseModel):
-    label: str = Field(..., description="Sentiment label (POSITIVE, NEGATIVE, etc.)")
+class SentimentScore(BaseModel):
+    label: str = Field(..., description="Sentiment label")
     score: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
 
-class PredictResponse(BaseModel):
+class SentimentResult(BaseModel):
     text: str = Field(..., description="Original text")
-    sentiment: SentimentLabelModel = Field(..., description="Predicted sentiment")
+    label: str = Field(..., description="Predicted sentiment label")
+    score: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Overall confidence")
     processing_time: float = Field(..., ge=0.0, description="Processing time in seconds")
     scores: Optional[Dict[str, float]] = Field(None, description="All label scores")
 
-class BatchPredictResponse(BaseModel):
-    results: List[PredictResponse] = Field(..., description="List of prediction results")
+class BatchSentimentResult(BaseModel):
+    results: List[SentimentResult] = Field(..., description="List of prediction results")
     total_processing_time: float = Field(..., ge=0.0, description="Total processing time in seconds")
     average_processing_time: float = Field(..., ge=0.0, description="Average processing time per text")
 
-class ModelInfoResponse(BaseModel):
+class ModelInfo(BaseModel):
     name: str = Field(..., description="Model name")
     framework: str = Field(..., description="ML framework")
     device: str = Field(..., description="Device (CPU/GPU)")
     quantized: bool = Field(..., description="Whether model is quantized")
     version: str = Field(..., description="Model version")
 
-class HealthResponse(BaseModel):
+class HealthStatus(BaseModel):
     status: str = Field(..., description="Service status")
     service: str = Field(..., description="Service name")
     model_loaded: bool = Field(..., description="Whether model is loaded")
     timestamp: str = Field(..., description="Timestamp of health check")
+    memory_usage: Optional[Dict[str, Any]] = Field(None, description="Memory usage information")
+    uptime: Optional[float] = Field(None, description="Service uptime in seconds")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -83,6 +87,7 @@ class ModelManager:
         self.load_time = 0
         self.device = None
         self._lock = asyncio.Lock()
+        self.start_time = time.time()
     
     async def load_model(self, model_path: Optional[str] = None) -> bool:
         """Load model from local path or HuggingFace Hub"""
@@ -194,7 +199,8 @@ class ModelManager:
                 
                 processed_results.append({
                     'text': text,
-                    'sentiment': SentimentLabelModel(label=overall_sentiment.upper(), score=confidence),
+                    'label': overall_sentiment.upper(),
+                    'score': confidence,
                     'confidence': confidence,
                     'processing_time': end_time - start_time,
                     'scores': sentiment_scores,
@@ -206,6 +212,40 @@ class ModelManager:
         except Exception as e:
             logger.error(f"Prediction failed: {str(e)}")
             raise
+
+    def get_health_status(self) -> Dict[str, Any]:
+        """Get current health status of the service"""
+        from ..core.config import settings
+        
+        current_time = time.time()
+        uptime = current_time - self.start_time
+        memory_usage = self.get_memory_usage()
+        
+        return {
+            "status": "healthy",
+            "service": settings.service_name,
+            "model_loaded": self.is_loaded(),
+            "timestamp": datetime.utcnow().isoformat(),
+            "memory_usage": memory_usage,
+            "uptime": uptime
+        }
+    
+    def get_memory_usage(self) -> Dict[str, Any]:
+        """Get memory usage information"""
+        import psutil
+        
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        
+        return {
+            "rss": memory_info.rss,  # Resident Set Size
+            "vms": memory_info.vms,  # Virtual Memory Size
+            "shared": memory_info.shared,
+            "text": memory_info.text,
+            "lib": memory_info.lib,
+            "data": memory_info.data,
+            "dirty": memory_info.dirty
+        }
 
 # Global model manager instance
 model_manager = ModelManager()

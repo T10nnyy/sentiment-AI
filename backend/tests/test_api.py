@@ -21,13 +21,13 @@ class TestRESTAPI:
         """Test single prediction endpoint"""
         response = client.post(
             "/api/predict",
-            json={"text": "I love this product!", "batch": False}
+            json={"text": "I love this product!"}
         )
         assert response.status_code == 200
         data = response.json()
         assert "label" in data
         assert "score" in data
-        assert data["label"] in ["positive", "negative"]
+        assert data["label"] in ["LABEL_0", "LABEL_1", "LABEL_2"]  # Updated for new model labels
         assert 0 <= data["score"] <= 1
     
     def test_predict_batch(self):
@@ -44,7 +44,7 @@ class TestRESTAPI:
         for result in data["results"]:
             assert "label" in result
             assert "score" in result
-            assert result["label"] in ["positive", "negative"]
+            assert result["label"] in ["LABEL_0", "LABEL_1", "LABEL_2"]  # Updated for new model labels
             assert 0 <= result["score"] <= 1
     
     def test_model_info(self):
@@ -52,7 +52,7 @@ class TestRESTAPI:
         response = client.get("/api/model/info")
         assert response.status_code == 200
         data = response.json()
-        assert "name" in data
+        assert data["name"] == "cardiffnlp/twitter-roberta-base-sentiment-latest"
         assert "framework" in data
         assert "quantized" in data
         assert "device" in data
@@ -79,7 +79,7 @@ class TestGraphQLAPI:
         result = data["data"]["predict"]
         assert "label" in result
         assert "score" in result
-        assert result["label"] in ["positive", "negative"]
+        assert result["label"] in ["LABEL_0", "LABEL_1", "LABEL_2"]  # Updated for new model labels
         assert 0 <= result["score"] <= 1
     
     def test_batch_predict_query(self):
@@ -104,7 +104,7 @@ class TestGraphQLAPI:
         for result in results:
             assert "label" in result
             assert "score" in result
-            assert result["label"] in ["positive", "negative"]
+            assert result["label"] in ["LABEL_0", "LABEL_1", "LABEL_2"]  # Updated for new model labels
             assert 0 <= result["score"] <= 1
     
     def test_model_info_query(self):
@@ -126,7 +126,7 @@ class TestGraphQLAPI:
         assert "modelInfo" in data["data"]
         
         info = data["data"]["modelInfo"]
-        assert "name" in info
+        assert info["name"] == "cardiffnlp/twitter-roberta-base-sentiment-latest"
         assert "framework" in info
         assert "quantized" in info
         assert "device" in info

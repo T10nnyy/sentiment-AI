@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from transformers import pipeline
 import uvicorn
@@ -18,14 +17,14 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Sentiment Analysis API",
-    description="Advanced sentiment analysis using siebert/sentiment-roberta-large-english",
+    description="Sentiment analysis using RoBERTa base model",
     version="1.0.0"
 )
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,6 +32,14 @@ app.add_middleware(
 
 # Global variables
 sentiment_pipeline = None
+MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+
+# Label mapping
+LABEL_MAPPING = {
+    "LABEL_0": "negative",
+    "LABEL_1": "neutral", 
+    "LABEL_2": "positive"
+}
 
 class TextInput(BaseModel):
     text: str
@@ -69,64 +76,73 @@ async def startup_event():
     """Initialize the model on startup"""
     global sentiment_pipeline
     try:
-        logger.info("Loading sentiment analysis model...")
+        logger.info(f"Loading model: {MODEL_NAME}")
+        
+        # Set environment variables
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        
         sentiment_pipeline = pipeline(
             "sentiment-analysis",
-            model="siebert/sentiment-roberta-large-english",
-            return_all_scores=True
+            model=MODEL_NAME,
+            return_all_scores=True,
+            device=-1
         )
         logger.info("Model loaded successfully!")
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
-        raise
+        # Try fallback model
+        try:
+            logger.info("Trying fallback model...")
+            sentiment_pipeline = pipeline(
+                "sentiment-analysis",
+                model="distilbert-base-uncased-finetuned-sst-2-english",
+                return_all_scores=True,
+                device=-1
+            )
+            logger.info("Fallback model loaded successfully!")
+        except Exception as fallback_error:
+            logger.error(f"Fallback model failed: {fallback_error}")
+            sentiment_pipeline = None
 
-# Add favicon route to prevent 404 errors
-@app.get("/favicon.ico")
-async def favicon():
-    return JSONResponse(status_code=204, content={})
+def normalize_label(label: str) -> str:
+    """Normalize label names"""
+    return LABEL_MAPPING.get(label, label.lower())
 
-# Add root route
 @app.get("/")
 async def root():
     return {
         "message": "Sentiment Analysis API",
         "version": "1.0.0",
-        "model": "siebert/sentiment-roberta-large-english",
-        "endpoints": {
-            "health": "/api/health",
-            "model_info": "/api/model/info",
-            "predict": "/api/predict",
-            "batch_predict": "/api/predict/batch",
-            "file_analyze": "/api/analyze/file"
-        }
+        "model": MODEL_NAME,
+        "status": "running"
     }
 
-@app.get("/api/health", response_model=HealthStatus)
+@app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
     from datetime import datetime
-    return HealthStatus(
-        status="healthy" if sentiment_pipeline is not None else "unhealthy",
-        service="sentiment-analysis-api",
-        model_loaded=sentiment_pipeline is not None,
-        timestamp=datetime.utcnow().isoformat()
-    )
+    return {
+        "status": "healthy" if sentiment_pipeline is not None else "unhealthy",
+        "service": "sentiment-analysis-api",
+        "model_loaded": sentiment_pipeline is not None,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
-@app.get("/api/model/info", response_model=ModelInfo)
+@app.get("/api/model/info")
 async def get_model_info():
     """Get model information"""
     if not sentiment_pipeline:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
-    return ModelInfo(
-        name="siebert/sentiment-roberta-large-english",
-        framework="PyTorch/Transformers",
-        device="CPU",
-        quantized=False,
-        version="1.0.0"
-    )
+    return {
+        "name": MODEL_NAME,
+        "framework": "PyTorch/Transformers",
+        "device": "CPU",
+        "quantized": False,
+        "version": "1.0.0"
+    }
 
-@app.post("/api/predict", response_model=SentimentResult)
+@app.post("/api/predict")
 async def predict_sentiment(input_data: TextInput):
     """Analyze sentiment of a single text"""
     if not sentiment_pipeline:
@@ -135,32 +151,30 @@ async def predict_sentiment(input_data: TextInput):
     try:
         start_time = time.time()
         
-        # Get predictions for all labels
         results = sentiment_pipeline(input_data.text)
-        
-        # Find the highest scoring result
         best_result = max(results[0], key=lambda x: x['score'])
         
+        normalized_label = normalize_label(best_result['label'])
         processing_time = time.time() - start_time
         
-        return SentimentResult(
-            label=best_result['label'],
-            score=best_result['score'],
-            confidence=best_result['score'],
-            processing_time=processing_time
-        )
+        return {
+            "label": normalized_label,
+            "score": best_result['score'],
+            "confidence": best_result['score'],
+            "processing_time": processing_time
+        }
     except Exception as e:
         logger.error(f"Prediction error: {e}")
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/predict/batch", response_model=BatchSentimentResult)
+@app.post("/api/predict/batch")
 async def predict_batch_sentiment(input_data: BatchTextInput):
     """Analyze sentiment of multiple texts"""
     if not sentiment_pipeline:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
     if len(input_data.texts) > 100:
-        raise HTTPException(status_code=400, detail="Maximum 100 texts allowed per batch")
+        raise HTTPException(status_code=400, detail="Maximum 100 texts allowed")
     
     try:
         start_time = time.time()
@@ -172,82 +186,26 @@ async def predict_batch_sentiment(input_data: BatchTextInput):
             best_result = max(predictions[0], key=lambda x: x['score'])
             text_processing_time = time.time() - text_start_time
             
-            results.append(SentimentResult(
-                label=best_result['label'],
-                score=best_result['score'],
-                confidence=best_result['score'],
-                processing_time=text_processing_time
-            ))
+            normalized_label = normalize_label(best_result['label'])
+            
+            results.append({
+                "label": normalized_label,
+                "score": best_result['score'],
+                "confidence": best_result['score'],
+                "processing_time": text_processing_time
+            })
         
         total_time = time.time() - start_time
         avg_time = total_time / len(results) if results else 0
         
-        return BatchSentimentResult(
-            results=results,
-            total_processing_time=total_time,
-            average_processing_time=avg_time
-        )
+        return {
+            "results": results,
+            "total_processing_time": total_time,
+            "average_processing_time": avg_time
+        }
     except Exception as e:
         logger.error(f"Batch prediction error: {e}")
-        raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
-
-@app.post("/api/analyze/file")
-async def analyze_file(file: UploadFile = File(...)):
-    """Analyze sentiment from uploaded file"""
-    if not sentiment_pipeline:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-    
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
-    
-    # Check file type
-    if not file.filename.endswith(('.csv', '.txt')):
-        raise HTTPException(status_code=400, detail="Only CSV and TXT files are supported")
-    
-    try:
-        content = await file.read()
-        
-        if file.filename.endswith('.csv'):
-            # Parse CSV file
-            df = pd.read_csv(io.StringIO(content.decode('utf-8')))
-            
-            # Look for text column (case insensitive)
-            text_column = None
-            for col in df.columns:
-                if col.lower() in ['text', 'content', 'message', 'review', 'comment']:
-                    text_column = col
-                    break
-            
-            if text_column is None:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="CSV file must contain a column named 'text', 'content', 'message', 'review', or 'comment'"
-                )
-            
-            texts = df[text_column].dropna().astype(str).tolist()
-            
-        else:  # TXT file
-            # Split by lines
-            texts = [line.strip() for line in content.decode('utf-8').split('\n') if line.strip()]
-        
-        if len(texts) > 1000:
-            raise HTTPException(status_code=400, detail="Maximum 1000 texts allowed per file")
-        
-        if not texts:
-            raise HTTPException(status_code=400, detail="No valid texts found in file")
-        
-        # Process the texts
-        batch_input = BatchTextInput(texts=texts)
-        result = await predict_batch_sentiment(batch_input)
-        return result
-        
-    except pd.errors.EmptyDataError:
-        raise HTTPException(status_code=400, detail="Empty or invalid CSV file")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="File encoding not supported. Please use UTF-8")
-    except Exception as e:
-        logger.error(f"File processing failed: {e}")
-        raise HTTPException(status_code=500, detail=f"File processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -260,7 +218,7 @@ async def global_exception_handler(request, exc):
 
 if __name__ == "__main__":
     uvicorn.run(
-        "app.main:app",
+        "main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
