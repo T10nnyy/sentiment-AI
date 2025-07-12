@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from transformers import pipeline
 import uvicorn
@@ -10,6 +11,8 @@ import time
 import pandas as pd
 import io
 import os
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,13 +24,19 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS
+# Add favicon endpoint
+@app.get("/favicon.ico", include_in_schema=False)
+async def get_favicon():
+    return Response(status_code=204)
+
+# Configure CORS with specific headers for file uploads
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", "Content-Type", "Content-Length", "Accept-Encoding", "X-CSRF-Token", "Authorization"],
+    expose_headers=["Content-Length", "Content-Range"],
 )
 
 # Global variables
@@ -205,6 +214,80 @@ async def predict_batch_sentiment(input_data: BatchTextInput):
         }
     except Exception as e:
         logger.error(f"Batch prediction error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/analyze/file")
+async def analyze_file(file: UploadFile = File(...)):
+    """Analyze sentiment from uploaded file and update model"""
+    logger.info(f"Received file upload: {file.filename}")
+    
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    if not sentiment_pipeline:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    
+    try:
+        content = await file.read()
+        text_content = content.decode('utf-8')
+        
+        # Split the content into lines and filter out empty lines
+        texts = [line.strip() for line in text_content.splitlines() if line.strip()]
+        
+        if len(texts) > 1000:
+            raise HTTPException(status_code=400, detail="Maximum 1000 texts allowed per file")
+        
+        start_time = time.time()
+        results = []
+        analysis_data = []  # Store analysis data for model training
+        
+        # Analyze each text and collect data for training
+        for text in texts:
+            text_start_time = time.time()
+            predictions = sentiment_pipeline(text)
+            best_result = max(predictions[0], key=lambda x: x['score'])
+            text_processing_time = time.time() - text_start_time
+            
+            normalized_label = normalize_label(best_result['label'])
+            confidence = best_result['score']
+            
+            # Store high-confidence predictions for model training
+            if confidence > 0.9:
+                analysis_data.append({
+                    'text': text,
+                    'label': best_result['label'],
+                    'confidence': confidence
+                })
+            
+            results.append({
+                "label": normalized_label,
+                "score": best_result['score'],
+                "confidence": best_result['score'],
+                "processing_time": text_processing_time
+            })
+        
+        # If we have enough high-confidence data, update model weights
+        if len(analysis_data) >= 10:
+            logger.info(f"Found {len(analysis_data)} high-confidence samples for model training")
+            # Model training would go here - for now we just log
+            logger.info("Model would be updated with new data (training disabled in demo)")
+        
+        total_time = time.time() - start_time
+        avg_time = total_time / len(results) if results else 0
+        
+        return {
+            "results": results,
+            "total_processing_time": total_time,
+            "average_processing_time": avg_time,
+            "analysis_stats": {
+                "total_samples": len(texts),
+                "high_confidence_samples": len(analysis_data)
+            }
+        }
+        
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid file encoding. Please upload a UTF-8 encoded text file")
+    except Exception as e:
+        logger.error(f"File analysis error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.exception_handler(Exception)

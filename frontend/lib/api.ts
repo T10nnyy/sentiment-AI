@@ -16,6 +16,7 @@ import type {
   GraphQLModelInfoResponse,
 } from "@/types/sentiment"
 
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 // Create axios instance
@@ -57,6 +58,46 @@ export const restApi = {
   // Single prediction
   predict: async (request: PredictRequest): Promise<SentimentResult> => {
     const response: AxiosResponse<SentimentResult> = await apiClient.post("/api/predict", request)
+    return response.data
+  },
+
+  // File analysis and model training
+  analyzeFile: async (file: File): Promise<BatchPredictResponse> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    
+    // Create a new axios instance for file upload to avoid content-type issues
+    const fileUploadClient = axios.create({
+      baseURL: API_BASE_URL,
+      timeout: 120000, // 2 minutes timeout for analysis
+    })
+
+    // Add request logging
+    fileUploadClient.interceptors.request.use(
+      (config) => {
+        console.log(`File Upload Request: ${config.method?.toUpperCase()} ${config.url}`)
+        return config
+      },
+      (error) => Promise.reject(error)
+    )
+
+    // Add error handling
+    fileUploadClient.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        const apiError: ApiError = {
+          detail: error.response?.data?.detail || error.message || "File upload failed",
+          status: error.response?.status,
+        }
+        return Promise.reject(apiError)
+      }
+    )
+    
+    const response: AxiosResponse<BatchPredictResponse> = await fileUploadClient.post("/api/analyze/file", formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
     return response.data
   },
 

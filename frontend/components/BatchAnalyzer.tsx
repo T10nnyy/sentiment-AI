@@ -4,7 +4,7 @@
  * Batch sentiment analysis component
  */
 
-import React, { useState } from "react"
+import React, { useState, useRef } from "react"
 import { z } from "zod"
 import { motion, AnimatePresence } from "framer-motion"
 import { Upload, Download, Trash2, Plus, TrendingUp, TrendingDown, BarChart3, FileText } from "lucide-react"
@@ -13,7 +13,7 @@ import toast from "react-hot-toast"
 import Button from "@/components/ui/Button"
 import Card from "@/components/ui/Card"
 import Textarea from "@/components/ui/Textarea"
-import { useBatchPrediction } from "@/hooks/useSentiment"
+import { useBatchPrediction, useSentimentFile } from "@/hooks/useSentiment"
 import type { SentimentResult } from "@/types/sentiment"
 
 // Form validation schema
@@ -32,8 +32,30 @@ interface BatchResult {
 const BatchAnalyzer: React.FC = () => {
   const [texts, setTexts] = useState<string[]>([""])
   const [results, setResults] = useState<BatchResult[]>([])
+  const [file, setFile] = useState<File | null>(null)
+  const [dragOver, setDragOver] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const batchPrediction = useBatchPrediction()
+  const fileAnalysis = useSentimentFile()
+
+  const handleFileSelect = (selectedFile: File) => {
+    if (selectedFile && (selectedFile.name.endsWith('.csv') || selectedFile.name.endsWith('.txt'))) {
+      setFile(selectedFile)
+      setResults([])
+    } else {
+      toast.error('Please select a CSV or TXT file')
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    const droppedFile = e.dataTransfer.files[0]
+    if (droppedFile) {
+      handleFileSelect(droppedFile)
+    }
+  }
 
   const addTextInput = () => {
     setTexts([...texts, ""])
@@ -53,30 +75,52 @@ const BatchAnalyzer: React.FC = () => {
   }
 
   const handleAnalyze = async () => {
-    const validTexts = texts.filter((text) => text.trim().length > 0)
+    if (file) {
+      // Handle file analysis
+      try {
+        const response = await fileAnalysis.mutateAsync(file)
+        const batchResults: BatchResult[] = response.results.map((result, index) => ({
+          text: `Text ${index + 1}`,
+          result: {
+            label: result.label,
+            score: result.score,
+          },
+          index,
+        }))
+        setResults(batchResults)
+        toast.success(`Analyzed file with ${response.results.length} texts successfully!`)
+      } catch (error) {
+        console.error("File analysis failed:", error)
+        toast.error("File analysis failed. Please try again.")
+      }
+    } else {
+      // Handle manual text input analysis
+      const validTexts = texts.filter((text) => text.trim().length > 0)
 
-    if (validTexts.length === 0) {
-      toast.error("Please enter at least one text to analyze")
-      return
-    }
+      if (validTexts.length === 0) {
+        toast.error("Please enter at least one text to analyze")
+        return
+      }
 
-    try {
-      const results = await batchPrediction.mutateAsync(validTexts)
-      const batchResults: BatchResult[] = results.map((result, index) => ({
-        text: validTexts[index],
-        result,
-        index,
-      }))
-      setResults(batchResults)
-      toast.success(`Analyzed ${results.length} texts successfully!`)
-    } catch (error) {
-      console.error("Batch analysis failed:", error)
+      try {
+        const results = await batchPrediction.mutateAsync(validTexts)
+        const batchResults: BatchResult[] = results.map((result, index) => ({
+          text: validTexts[index],
+          result,
+          index,
+        }))
+        setResults(batchResults)
+        toast.success(`Analyzed ${results.length} texts successfully!`)
+      } catch (error) {
+        console.error("Batch analysis failed:", error)
+      }
     }
   }
 
   const clearAll = () => {
     setTexts([""])
     setResults([])
+    setFile(null)
   }
 
   const exportResults = () => {
@@ -152,9 +196,40 @@ const BatchAnalyzer: React.FC = () => {
       {/* Input Section */}
       <Card className="max-w-4xl mx-auto">
         <div className="space-y-4">
+          {/* File Upload Section */}
+          <div
+            className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+              dragOver ? "border-blue-400 bg-blue-50" : "border-gray-300"
+            }`}
+            onDrop={handleDrop}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+          >
+            <FileText className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+            <p className="text-sm text-gray-600 mb-2">
+              Drag and drop your file here, or click to select
+            </p>
+            <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
+              Select File
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.txt"
+              onChange={(e) => {
+                const selectedFile = e.target.files?.[0]
+                if (selectedFile) handleFileSelect(selectedFile)
+              }}
+              className="hidden"
+            />
+          </div>
+
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Texts to Analyze ({texts.filter((t) => t.trim()).length})
+              Or Enter Texts Manually ({texts.filter((t) => t.trim()).length})
             </h3>
             <div className="flex space-x-2">
               <Button
@@ -194,7 +269,9 @@ const BatchAnalyzer: React.FC = () => {
                     onClick={() => removeTextInput(index)}
                     icon={<Trash2 className="w-4 h-4" />}
                     className="mt-2"
-                  />
+                  >
+                    Remove
+                  </Button>
                 )}
               </motion.div>
             ))}

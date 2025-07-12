@@ -75,6 +75,7 @@
     "typescript": "^5",
     "use-sync-external-store": "latest",
     "vaul": "latest",
+    "zod": "^4.0.5",
     "zustand": "latest"
   },
   "devDependencies": {

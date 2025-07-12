@@ -1,14 +1,29 @@
-# GPU-enabled Dockerfile
+# GPU-enabled Dockerfile with retry logic
 FROM nvidia/cuda:11.8-devel-ubuntu20.04 as builder
 
-# Install Python and system dependencies
-RUN apt-get update && apt-get install -y \
-    python3.11 \
-    python3.11-dev \
-    python3-pip \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python and system dependencies with retry logic
+RUN for i in 1 2 3; do \
+        apt-get update && \
+        apt-get install -y --fix-missing --no-install-recommends \
+            python3.11 \
+            python3.11-dev \
+            python3-pip \
+            python3.11-distutils \
+            build-essential \
+            curl \
+            wget \
+            git \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/* \
+        && break || sleep 5; \
+    done
+
+# Create symlinks for python
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python
 
 # Set working directory
 WORKDIR /app
@@ -16,27 +31,81 @@ WORKDIR /app
 # Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip3 install --no-cache-dir --user -r requirements.txt
+# Install Python dependencies with retry logic
+RUN for i in 1 2 3; do \
+        python3 -m pip install --no-cache-dir --user --upgrade pip && \
+        python3 -m pip install --no-cache-dir --user -r requirements.txt \
+        && break || (echo "Attempt $i failed, retrying..." && sleep 10); \
+    done
+
+# Create Python script for model download
+RUN echo '#!/usr/bin/env python3\n\
+import os\n\
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"\n\
+os.environ["TRANSFORMERS_OFFLINE"] = "0"\n\
+from transformers import pipeline\n\
+import time\n\
+import sys\n\
+\n\
+def download_model_with_retry(model_name, max_retries=3):\n\
+    for attempt in range(max_retries):\n\
+        try:\n\
+            print(f"Downloading model {model_name}, attempt {attempt + 1}...")\n\
+            pipeline("sentiment-analysis", model=model_name, return_all_scores=True)\n\
+            print(f"Successfully downloaded {model_name}")\n\
+            return True\n\
+        except Exception as e:\n\
+            print(f"Attempt {attempt + 1} failed: {e}")\n\
+            if attempt < max_retries - 1:\n\
+                time.sleep(10)\n\
+            else:\n\
+                print("All attempts failed, trying fallback model...")\n\
+                try:\n\
+                    pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")\n\
+                    print("Fallback model downloaded successfully")\n\
+                    return True\n\
+                except Exception as fallback_error:\n\
+                    print(f"Fallback model also failed: {fallback_error}")\n\
+                    return False\n\
+    return False\n\
+\n\
+if not download_model_with_retry("cardiffnlp/twitter-roberta-base-sentiment-latest"):\n\
+    print("Model download failed, but continuing build...")\n\
+    sys.exit(0)\n\
+' > /tmp/download_model.py && python3 /tmp/download_model.py && rm /tmp/download_model.py
 
 # Runtime stage
 FROM nvidia/cuda:11.8-runtime-ubuntu20.04 as runtime
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    python3.11 \
-    python3-pip \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install runtime dependencies with retry logic
+RUN for i in 1 2 3; do \
+        apt-get update && \
+        apt-get install -y --fix-missing --no-install-recommends \
+            python3.11 \
+            python3-pip \
+            curl \
+            wget \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/* \
+        && break || sleep 5; \
+    done
+
+# Create symlinks for python
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python
 
 # Create non-root user
-RUN useradd --create-home --shell /bin/bash app
+RUN useradd --create-home --shell /bin/bash --uid 1000 app
 
 # Set working directory
 WORKDIR /app
 
 # Copy Python packages from builder
 COPY --from=builder /root/.local /home/app/.local
+COPY --from=builder /root/.cache /home/app/.cache
 
 # Copy application code
 COPY --chown=app:app . .
@@ -46,13 +115,17 @@ USER app
 
 # Add local packages to PATH
 ENV PATH=/home/app/.local/bin:$PATH
+ENV HF_HOME=/home/app/.cache/huggingface
+ENV TRANSFORMERS_CACHE=/home/app/.cache/huggingface/transformers
+ENV HF_HUB_CACHE=/home/app/.cache/huggingface/hub
+ENV CUDA_VISIBLE_DEVICES=0
 
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check with longer timeout for GPU model loading
+HEALTHCHECK --interval=30s --timeout=45s --start-period=90s --retries=5 \
     CMD curl -f http://localhost:8000/api/health || exit 1
 
-# Run application
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run application with retry logic
+CMD ["sh", "-c", "for i in 1 2 3; do python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 && break || sleep 15; done"]

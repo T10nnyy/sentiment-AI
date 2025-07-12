@@ -2,25 +2,41 @@ version: '3.8'
 
 services:
   backend:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     volumes:
       - "./model:/app/model"
       - "./data:/app/data"
+      - "model_cache:/home/app/.cache/huggingface"
     environment:
-      - MODEL_NAME=siebert/sentiment-roberta-large-english
+      - MODEL_NAME=cardiffnlp/twitter-roberta-base-sentiment-latest
       - MODEL_FRAMEWORK=pytorch
       - ENABLE_QUANTIZATION=false
       - ENABLE_HOT_RELOAD=true
       - DEBUG=false
       - CORS_ORIGINS=["http://localhost:3000"]
+      - HF_HUB_DISABLE_PROGRESS_BARS=1
+      - TRANSFORMERS_OFFLINE=0
+      - HF_HUB_DISABLE_TELEMETRY=1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
-      timeout: 10s
-      retries: 3
+      timeout: 30s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
 
   backend-gpu:
     profiles: ["gpu"]
@@ -32,31 +48,65 @@ services:
     volumes:
       - "./model:/app/model"
       - "./data:/app/data"
+      - "model_cache:/home/app/.cache/huggingface"
     environment:
-      - MODEL_NAME=siebert/sentiment-roberta-large-english
+      - MODEL_NAME=cardiffnlp/twitter-roberta-base-sentiment-latest
       - MODEL_FRAMEWORK=pytorch
       - DEVICE=cuda
       - ENABLE_QUANTIZATION=true
       - QUANTIZATION_BACKEND=tensorrt
       - ENABLE_HOT_RELOAD=true
       - DEBUG=false
-    runtime: nvidia
+      - CORS_ORIGINS=["http://localhost:3000"]
+      - HF_HUB_DISABLE_PROGRESS_BARS=1
+      - TRANSFORMERS_OFFLINE=0
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
-      timeout: 10s
-      retries: 3
+      timeout: 45s
+      retries: 5
+      start_period: 90s
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
 
-  # Optional: Redis for caching (future enhancement)
+  # Redis for caching
   redis:
-    profiles: ["cache"]
     image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
 
 volumes:
   redis_data:
+    driver: local
+  model_cache:
+    driver: local

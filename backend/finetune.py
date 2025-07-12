@@ -3,25 +3,42 @@ Fine-tuning script for sentiment analysis model
 """
 
 import os
+import json
 import logging
+import random
 from typing import Dict, List, Tuple
-import pandas as pd
 import torch
+import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import OneCycleLR
 from transformers import (
     AutoTokenizer, 
     AutoModelForSequenceClassification,
-    TrainingArguments, 
-    Trainer,
-    EarlyStoppingCallback
+    get_linear_schedule_with_warmup
 )
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import numpy as np
+from tqdm import tqdm
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+# Set random seeds for reproducibility
+def set_random_seeds(seed: int = 42):
+    """Set random seeds for reproducibility"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ['PYTHONHASHSEED'] = str(seed)
 
 # Model configuration
 MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment-latest"
@@ -58,28 +75,30 @@ class SentimentDataset(Dataset):
             'labels': torch.tensor(label, dtype=torch.long)
         }
 
-def load_data(data_path: str) -> Tuple[List[str], List[int]]:
-    """Load training data from CSV file"""
+def load_jsonl_data(data_path: str) -> Tuple[List[str], List[int]]:
+    """Load training data from JSONL file"""
     try:
-        df = pd.read_csv(data_path)
+        texts = []
+        labels = []
+        label_set = set()
         
-        # Assume columns are 'text' and 'label'
-        if 'text' not in df.columns or 'label' not in df.columns:
-            raise ValueError("CSV must contain 'text' and 'label' columns")
+        # Read JSONL file
+        with open(data_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                data = json.loads(line.strip())
+                texts.append(data['text'])
+                label_set.add(data['label'])
+                labels.append(data['label'])
         
-        texts = df['text'].astype(str).tolist()
+        # Create label mapping
+        label_map = {label: idx for idx, label in enumerate(sorted(label_set))}
+        logger.info(f"Label mapping: {label_map}")
         
-        # Convert labels to integers if they're strings
-        if df['label'].dtype == 'object':
-            unique_labels = df['label'].unique()
-            label_map = {label: idx for idx, label in enumerate(unique_labels)}
-            labels = [label_map[label] for label in df['label']]
-            logger.info(f"Label mapping: {label_map}")
-        else:
-            labels = df['label'].tolist()
+        # Convert string labels to integers
+        labels = [label_map[label] for label in labels]
         
         logger.info(f"Loaded {len(texts)} samples")
-        return texts, labels
+        return texts, labels, label_map
         
     except Exception as e:
         logger.error(f"Failed to load data: {e}")
@@ -100,25 +119,118 @@ def compute_metrics(eval_pred):
         'recall': recall
     }
 
+def train_epoch(
+    model: nn.Module,
+    dataloader: DataLoader,
+    optimizer: AdamW,
+    scheduler,
+    device: torch.device,
+    max_grad_norm: float = 1.0
+) -> float:
+    """Train for one epoch"""
+    model.train()
+    total_loss = 0
+    progress_bar = tqdm(dataloader, desc="Training")
+    
+    for batch in progress_bar:
+        # Move batch to device
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['labels'].to(device)
+        
+        # Forward pass
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels
+        )
+        
+        loss = outputs.loss
+        total_loss += loss.item()
+        
+        # Backward pass
+        loss.backward()
+        
+        # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        
+        # Optimizer and scheduler steps
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad()
+        
+        # Update progress bar
+        progress_bar.set_postfix({'loss': loss.item()})
+    
+    return total_loss / len(dataloader)
+
+def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device) -> Dict[str, float]:
+    """Evaluate the model"""
+    model.eval()
+    all_preds = []
+    all_labels = []
+    total_loss = 0
+    
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Evaluating"):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+            
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            
+            loss = outputs.loss
+            total_loss += loss.item()
+            
+            preds = torch.argmax(outputs.logits, dim=-1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+    
+    # Compute metrics
+    metrics = compute_metrics((all_preds, all_labels))
+    metrics['loss'] = total_loss / len(dataloader)
+    
+    return metrics
+
 def fine_tune_model(
     data_path: str,
-    output_dir: str = OUTPUT_DIR,
+    output_dir: str = "./model",
     num_epochs: int = 3,
     batch_size: int = 16,
-    learning_rate: float = 2e-5,
-    warmup_steps: int = 500,
+    learning_rate: float = 3e-5,
+    warmup_ratio: float = 0.1,
     weight_decay: float = 0.01,
-    test_size: float = 0.2
+    test_size: float = 0.2,
+    seed: int = 42
 ):
-    """Fine-tune the sentiment analysis model"""
+    """Fine-tune the sentiment analysis model with custom training loop"""
+    
+    # Set random seeds
+    set_random_seeds(seed)
+    
+    # Setup device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
     
     # Load data
     logger.info("Loading training data...")
-    texts, labels = load_data(data_path)
+    texts, labels, label_map = load_jsonl_data(data_path)
+    
+    # Save label mapping
+    with open(os.path.join(output_dir, "label_map.json"), "w") as f:
+        json.dump(label_map, f)
+    logger.info(f"Saved label mapping to {output_dir}/label_map.json")
     
     # Split data
     train_texts, val_texts, train_labels, val_labels = train_test_split(
-        texts, labels, test_size=test_size, random_state=42, stratify=labels
+        texts, labels, test_size=test_size, random_state=seed, stratify=labels
     )
     
     logger.info(f"Training samples: {len(train_texts)}")
@@ -129,72 +241,89 @@ def fine_tune_model(
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     model = AutoModelForSequenceClassification.from_pretrained(
         MODEL_NAME,
-        num_labels=len(set(labels))
-    )
+        num_labels=len(label_map)
+    ).to(device)
     
-    # Create datasets
+    # Create datasets and dataloaders
     train_dataset = SentimentDataset(train_texts, train_labels, tokenizer)
     val_dataset = SentimentDataset(val_texts, val_labels, tokenizer)
     
-    # Training arguments
-    training_args = TrainingArguments(
-        output_dir=output_dir,
-        num_train_epochs=num_epochs,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
-        warmup_steps=warmup_steps,
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4
+    )
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        num_workers=4
+    )
+    
+    # Setup optimizer
+    optimizer = AdamW(
+        model.parameters(),
+        lr=learning_rate,
         weight_decay=weight_decay,
-        learning_rate=learning_rate,
-        logging_dir=f'{output_dir}/logs',
-        logging_steps=100,
-        evaluation_strategy="steps",
-        eval_steps=500,
-        save_strategy="steps",
-        save_steps=500,
-        load_best_model_at_end=True,
-        metric_for_best_model="f1",
-        greater_is_better=True,
-        save_total_limit=2,
-        report_to=None  # Disable wandb/tensorboard
+        betas=(0.9, 0.999),
+        eps=1e-8
     )
     
-    # Create trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
+    # Setup schedulers
+    num_training_steps = len(train_dataloader) * num_epochs
+    num_warmup_steps = int(num_training_steps * warmup_ratio)
+    
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=num_training_steps
     )
     
-    # Train model
+    # Training loop
     logger.info("Starting training...")
-    trainer.train()
+    best_f1 = 0
+    for epoch in range(num_epochs):
+        logger.info(f"\nEpoch {epoch + 1}/{num_epochs}")
+        
+        # Train
+        train_loss = train_epoch(
+            model,
+            train_dataloader,
+            optimizer,
+            scheduler,
+            device
+        )
+        logger.info(f"Training loss: {train_loss:.4f}")
+        
+        # Evaluate
+        metrics = evaluate(model, val_dataloader, device)
+        logger.info(f"Validation metrics: {metrics}")
+        
+        # Save best model
+        if metrics['f1'] > best_f1:
+            best_f1 = metrics['f1']
+            logger.info(f"New best F1: {best_f1:.4f} - Saving model...")
+            
+            # Save model and tokenizer
+            os.makedirs(output_dir, exist_ok=True)
+            model.save_pretrained(output_dir)
+            tokenizer.save_pretrained(output_dir)
     
-    # Save model
-    logger.info(f"Saving model to {output_dir}")
-    trainer.save_model()
-    tokenizer.save_pretrained(output_dir)
+    logger.info("\nTraining completed!")
+    logger.info(f"Best F1: {best_f1:.4f}")
     
-    # Evaluate model
-    logger.info("Evaluating model...")
-    eval_results = trainer.evaluate()
-    
-    logger.info("Training completed!")
-    logger.info(f"Final evaluation results: {eval_results}")
-    
-    return trainer, eval_results
+    return model, tokenizer, metrics
 
 if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Fine-tune sentiment analysis model")
-    parser.add_argument("--data_path", type=str, required=True, help="Path to training data CSV")
-    parser.add_argument("--output_dir", type=str, default=OUTPUT_DIR, help="Output directory")
-    parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("-data", "--data_path", type=str, required=True, help="Path to training data JSONL file")
+    parser.add_argument("-epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("-lr", "--learning_rate", type=float, default=3e-5, help="Learning rate")
+    parser.add_argument("--output_dir", type=str, default="./model", help="Output directory")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
-    parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     
     args = parser.parse_args()
     
@@ -203,5 +332,6 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         num_epochs=args.epochs,
         batch_size=args.batch_size,
-        learning_rate=args.learning_rate
+        learning_rate=args.learning_rate,
+        seed=args.seed
     )

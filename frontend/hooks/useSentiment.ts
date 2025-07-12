@@ -186,6 +186,45 @@ export const useBatchPrediction = () => {
   )
 }
 
+// Hook for file analysis
+export const useSentimentFile = () => {
+  const { setLoading, setError, updateStats } = useSentimentStore()
+
+  return useMutation(
+    async (file: File) => {
+      const startTime = Date.now()
+
+      try {
+        const result = await restApi.analyzeFile(file)
+        const responseTime = Date.now() - startTime
+        updateStats(responseTime)
+        return result
+      } catch (error: any) {
+        throw {
+          detail: error.message || "File analysis failed",
+          status: error.status,
+        }
+      }
+    },
+    {
+      onMutate: () => {
+        setLoading(true)
+        setError(null)
+      },
+      onSuccess: () => {
+        toast.success("File analysis completed!")
+      },
+      onError: (error: ApiError) => {
+        setError(error.detail)
+        toast.error(`File analysis failed: ${error.detail}`)
+      },
+      onSettled: () => {
+        setLoading(false)
+      },
+    }
+  )
+}
+
 // Enhanced model info hook with GraphQL support
 export const useModelInfo = () => {
   const { useGraphQL } = useSentimentStore()
