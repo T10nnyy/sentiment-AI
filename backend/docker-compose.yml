@@ -21,6 +21,7 @@ services:
       - HF_HUB_DISABLE_PROGRESS_BARS=1
       - TRANSFORMERS_OFFLINE=0
       - HF_HUB_DISABLE_TELEMETRY=1
+      - TRANSFORMERS_CACHE=/tmp/huggingface
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
