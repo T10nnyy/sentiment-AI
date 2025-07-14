@@ -106,8 +106,12 @@ def load_jsonl_data(data_path: str) -> Tuple[List[str], List[int]]:
 
 def compute_metrics(eval_pred):
     """Compute metrics for evaluation"""
-    predictions, labels = eval_pred
-    predictions = np.argmax(predictions, axis=1)
+    logits, labels = eval_pred
+    # If predictions are already probabilities/logits (2D array), get the predicted class
+    if len(logits.shape) > 1:
+        predictions = np.argmax(logits, axis=1)
+    else:
+        predictions = logits  # If predictions are already class indices
     
     precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, average='weighted')
     accuracy = accuracy_score(labels, predictions)
@@ -167,7 +171,7 @@ def train_epoch(
 def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device) -> Dict[str, float]:
     """Evaluate the model"""
     model.eval()
-    all_preds = []
+    all_logits = []
     all_labels = []
     total_loss = 0
     
@@ -186,12 +190,17 @@ def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device) -> 
             loss = outputs.loss
             total_loss += loss.item()
             
-            preds = torch.argmax(outputs.logits, dim=-1)
-            all_preds.extend(preds.cpu().numpy())
+            # Get the logits and convert to numpy
+            logits = outputs.logits
+            all_logits.append(logits.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
     
+    # Concatenate all logits
+    all_logits = np.concatenate(all_logits, axis=0)
+    all_labels = np.array(all_labels)
+    
     # Compute metrics
-    metrics = compute_metrics((all_preds, all_labels))
+    metrics = compute_metrics((all_logits, all_labels))
     metrics['loss'] = total_loss / len(dataloader)
     
     return metrics
