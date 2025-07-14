@@ -1,6 +1,7 @@
+
 # Multi-stage optimized Dockerfile for CPU deployment
 FROM python:3.11-slim as builder
-
+ENV TRANSFORMERS_CACHE=/tmp/huggingface
 # Install system dependencies with retry logic and better error handling
 RUN for i in 1 2 3; do \
         apt-get update && \
