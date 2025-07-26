@@ -4,8 +4,6 @@
 
 A **production-ready** sentiment analysis application with **dual API support** (REST + GraphQL), leveraging a **RoBERTa-based transformer** model for high-accuracy text classification.
 
-🎥 **[DEMONSTRATION VIDEO](https://www.loom.com/share/62a2122ba65f4658a1045d04557ed87c?sid=97b761ba-49c2-4c5c-88f5-8878d70bb5ce)**
-
 ---
 
 ## 🚀 Tech Stack
